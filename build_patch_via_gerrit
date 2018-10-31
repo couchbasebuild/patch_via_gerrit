@@ -1,0 +1,27 @@
+#!/bin/bash -ex
+
+pushd `dirname $0` > /dev/null
+SCRIPTPATH=`pwd -P`
+popd > /dev/null
+
+echo Setting up Python virtual environment
+mkdir -p build
+python3 -m venv build/venv
+. build/venv/bin/activate
+
+echo Adding pyinstaller
+pip3 install pyinstaller
+
+echo Installing patch_via_gerrit requirements
+pip3 install -r ${SCRIPTPATH}/requirements.txt
+
+echo Compiling patch_via_gerrit
+PYINSTDIR=$(pwd)/build/pyinstaller
+mkdir -p ${PYINSTDIR}
+pyinstaller --log-level DEBUG \
+    --workpath ${PYINSTDIR} \
+    --specpath ${PYINSTDIR} \
+    --distpath dist --noconfirm \
+    --onefile \
+    --paths ${SCRIPTPATH}/patch_via_gerrit/scripts \
+    ${SCRIPTPATH}/patch_via_gerrit/scripts/patch_via_gerrit.py
