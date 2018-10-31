@@ -12,6 +12,9 @@ call .\build\venv\Scripts\activate.bat || goto error
 echo Adding pyinstaller
 pip3 install pyinstaller || goto error
 
+echo Installing certifi
+pip3 install certifi || goto error
+
 echo Installing patch_via_gerrit requirements
 pip3 install -r "%SCRIPTPATH%\requirements.txt" || goto error
 
