@@ -198,7 +198,7 @@ class GerritPatches:
             reviews.update(self.get_open_parents(p_review[p_review_id]))
 
         logger.debug('Found parents: {}'.format(
-            ', '.join([r.keys()[0] for r in reviews]))
+            ', '.join([str(r) for r in reviews]))
         )
 
         return reviews
