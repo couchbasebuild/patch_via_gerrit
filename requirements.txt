@@ -1,3 +1,3 @@
 certifi
-pygerrit2==2.0.6
-requests==2.18.4
+pygerrit2==2.0.13
+requests==2.20.0
