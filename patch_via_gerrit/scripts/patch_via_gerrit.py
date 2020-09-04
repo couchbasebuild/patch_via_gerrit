@@ -343,6 +343,10 @@ def main():
     and apply them to the repo sync
     """
 
+    # PyInstaller binaries get LD_LIBRARY_PATH set for them, and that
+    # can have unwanted side-effects for our subprocesses.
+    os.environ.pop("LD_LIBRARY_PATH", None)
+
     parser = argparse.ArgumentParser(
         description='Patch repo sync with requested Gerrit reviews'
     )
