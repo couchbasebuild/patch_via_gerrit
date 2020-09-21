@@ -85,7 +85,6 @@ class GerritChange:
         Initialize with key information for a Gerrit review, including
         information about related parents
         """
-
         self.status = data['status']
         self.project = data['project']
         self.branch = data['branch']
@@ -126,22 +125,7 @@ class GerritPatches:
         self.base_options = [
             'CURRENT_REVISION', 'CURRENT_COMMIT', 'DOWNLOAD_COMMANDS'
         ]
-        self.seen_reviews = set()
         self.repo_source = repo_source
-        self.projects = dict()
-        self.get_projects()
-
-    def get_projects(self):
-        with cd(self.repo_source):
-            manifest_content = subprocess.check_output(['repo', 'manifest', '-r'])
-            manifest = EleTree.fromstring(manifest_content)
-
-            for project in manifest.findall('project'):
-                self.projects[project.attrib['name']] = {
-                    'branch': project.attrib['upstream'] \
-                        if 'upstream' in project.attrib and not project.attrib['upstream'].startswith('refs/tags') \
-                        else None
-                }
 
     def query(self, query_string, options=None):
         """
@@ -249,33 +233,34 @@ class GerritPatches:
             stack.extend(review_ids)
 
         # From the stack, check each entry and add to the final set
-        # of reviews if not already there, keeping track of which
-        # have been seen so far.  For each review, also look for any
-        # related reviews via change ID and topic, along with any
-        # still open parents, adding to the stack as needed as long
-        # as they are for the same branch as listed for that project
-        # in the manifest.  All relevant reviews will have been found
-        # once the stack is empty.
+        # of reviews if not already there and we have not already
+        # applied a patch bearing the same change_id to a different
+        # branch of the same project.
+        #
+        # We keep track of which change have been seen so far, and
+        # look for any related reviews via change ID and topic, along
+        # with any still open parents, adding to the stack as needed.
+        #
+        # All relevant reviews will have been found once the stack
+        # is empty.
         while stack:
             review_id = stack.pop()
             reviews = self.get_changes_via_review_id(review_id)
 
             for new_id, review in reviews.items():
-                if new_id in self.seen_reviews:
+                if new_id in all_reviews.keys():
                     continue
 
-                # if no upstream was listed in `repo manifest -r` or
-                # upstream starts with refs/tags, raise an error
-                if not self.projects[review.project]['branch']:
-                    raise InvalidUpstreamException(review.project)
+                # Stop processing a review if one has already been added
+                # for the same project and change_id (e.g. if the
+                # incoming review is on a different branch to one we've
+                # already applied)
+                if [k for k, v in all_reviews.items()
+                    if v.project == review.project
+                        and v.change_id == review.change_id]:
+                    break
 
-                # only add reviews for processing if they are for the
-                # same branch of the project listed as the upstream
-                # in `repo manifest -r`
-                if review.branch == self.projects[review.project]['branch']:
-                    all_reviews[new_id] = review
-
-                self.seen_reviews.add(new_id)
+                all_reviews[new_id] = review
 
                 change_reviews = self.get_changes_via_change_id(
                     review.change_id
@@ -283,7 +268,7 @@ class GerritPatches:
 
                 stack.extend(
                     [r_id for r_id in change_reviews.keys()
-                     if r_id not in self.seen_reviews]
+                     if r_id not in all_reviews.keys()]
                 )
 
                 if review.topic is not None:
@@ -292,12 +277,12 @@ class GerritPatches:
                     )
                     stack.extend(
                         [r_id for r_id in topic_reviews.keys()
-                         if r_id not in self.seen_reviews]
+                         if r_id not in all_reviews.keys()]
                     )
 
                 stack.extend(
                     [r_id for r_id in self.get_open_parents(review)
-                     if r_id not in self.seen_reviews]
+                     if r_id not in all_reviews.keys()]
                 )
 
         logger.debug('List of review IDs to apply: {}'.format(

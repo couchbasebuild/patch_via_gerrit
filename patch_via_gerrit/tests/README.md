@@ -12,7 +12,7 @@ source venv/bin/activate
 Install package requirements, pytest and pytest-cov
 
 ```shell
-pip3 install -r ../requirements.txt
+pip3 install -r ../../requirements.txt
 pip3 install pytest pytest-cov
 ```
 

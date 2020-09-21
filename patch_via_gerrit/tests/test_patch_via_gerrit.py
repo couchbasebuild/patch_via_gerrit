@@ -65,10 +65,11 @@ class TestGerritPatches:
         assert os.path.exists(f'{self.source_path}/tlm/test/change1')
 
     def test_patch_repo_sync_madhatter_branch(self):
-        # applying a single patch on mad hatter (should not be applied because manifest points at master for that project)
+        # applying a single patch on mad hatter (should be applied because although manifest points at master
+        # for that project, we are passing this review explicitly)
         self.reset()
         self.gerrit_patches.patch_repo_sync([134811], 'review')
-        assert not os.path.exists(f'{self.source_path}/tlm/test/change3')
+        assert os.path.exists(f'{self.source_path}/tlm/test/change3')
 
     def test_patch_repo_sync_master_branch_shared_change_id(self):
         # applying a single patch on the master branch, which shares its change_id with a similar change on mad-hatter
@@ -79,22 +80,22 @@ class TestGerritPatches:
 
     def test_patch_repo_sync_mad_hatter_branch_shared_change_id(self):
         # applying a single patch on the mad-hatter branch, which shares its change_id with a similar change on master
-        # only master change should apply, as manifest points at master branch for that project
+        # only mad-hatter change should apply, as it was explicitly specified
         self.reset()
         self.gerrit_patches.patch_repo_sync([134814], 'review')
-        assert os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and not os.path.exists(f'{self.source_path}/tlm/test/change4b')
+        assert not os.path.exists(f'{self.source_path}/tlm/test/change4a') \
+            and os.path.exists(f'{self.source_path}/tlm/test/change4b')
 
     def test_patch_repo_sync_multiple_changes_with_shared_id_by_review_id(self):
         # applying multiple changes, one of which:
-        #   applies a change to master
-        #   shares its change_id with a change on mad-hatter which should *not* be applied
-        #   shared its change_id with a change in geocouch which *should* be applied
+        #   applies an explicit change to mad-hatter although manifest references master
+        #   shares its change_id with a change on master which should *not* be applied
+        #   shares its change_id with a change in geocouch which *should* be applied
         self.reset()
         self.gerrit_patches.patch_repo_sync([134808, 134814], 'review')
         assert os.path.exists(f'{self.source_path}/tlm/test/change1') \
-            and os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and not os.path.exists(f'{self.source_path}/tlm/test/change4b') \
+            and not os.path.exists(f'{self.source_path}/tlm/test/change4a') \
+            and os.path.exists(f'{self.source_path}/tlm/test/change4b') \
             and os.path.exists(f'{self.source_path}/geocouch/test/change4c')
 
     def test_patch_repo_sync_multiple_changes_with_shared_id_by_review_id_2(self):
