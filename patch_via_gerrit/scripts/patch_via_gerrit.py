@@ -161,6 +161,18 @@ class GerritPatches:
 
         logger.debug('Querying on review ID {}'.format(review_id))
 
+        #Query review ID directly first to ensure it exist and is readable
+        #This filters out invalid and inaccessible "prviate" review IDs.
+        #A "private" review ID is a review marked "private" by the owner so that no one else can see it.
+        #Only gerrit admin and users with "View Private Changes" permission can see a "private" review.
+        if ( len(self.query('/changes/?q={}'.format(review_id))) == 0 ):
+            logger.error(
+                'Query returns no data for {}!\n'
+                'It is either invalid or marked as "private" by its owner.\n'
+                'A "private" review is only accessible by users with "View Private Changes" permission.'.format(review_id)
+            )
+            sys.exit(1)
+
         return self.query('/changes/?q=status:open+{}'.format(review_id))
 
     def get_changes_via_change_id(self, change_id):
