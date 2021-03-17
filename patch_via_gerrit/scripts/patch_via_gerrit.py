@@ -12,8 +12,10 @@ import argparse
 import configparser
 import contextlib
 import logging
+import json
 import os
 import os.path
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as EleTree
@@ -80,7 +82,7 @@ class ParseCSVs(argparse.Action):
 class GerritChange:
     """Encapsulation of relevant information for a given Gerrit review"""
 
-    def __init__(self, data):
+    def __init__(self, data, patch_command):
         """
         Initialize with key information for a Gerrit review, including
         information about related parents
@@ -99,9 +101,13 @@ class GerritChange:
 
         if 'anonymous http' in fetch_info:
             self.patch_command = \
-                fetch_info['anonymous http']['commands']['Cherry Pick']
+                fetch_info['anonymous http']['commands'][patch_command]
         else:  # only other option is SSH
-            self.patch_command = fetch_info['ssh']['commands']['Cherry Pick']
+            self.patch_command = fetch_info['ssh']['commands'][patch_command]
+
+        # Let the user be picked up from whatever key is associated with review.couchbase.org
+        self.patch_command = re.compile('ssh://.*@').sub('ssh://', self.patch_command)
+        print("patch_command:" + self.patch_command)
 
 
 class GerritPatches:
@@ -117,7 +123,7 @@ class GerritPatches:
     be applied to the repo sync
     """
 
-    def __init__(self, gerrit_url, user, passwd, repo_source):
+    def __init__(self, gerrit_url, user, passwd, repo_source, checkout=False):
         """Initial Gerrit connection and set base options"""
 
         auth = HTTPBasicAuth(user, passwd)
@@ -125,6 +131,7 @@ class GerritPatches:
         self.base_options = [
             'CURRENT_REVISION', 'CURRENT_COMMIT', 'DOWNLOAD_COMMANDS'
         ]
+        self.patch_command = 'Checkout' if checkout else 'Cherry Pick'
         self.repo_source = repo_source
 
     def query(self, query_string, options=None):
@@ -148,9 +155,10 @@ class GerritPatches:
         except requests.exceptions.HTTPError as exc:
             raise RuntimeError(exc)
         else:
+            print(json.dumps(results))
             for result in results:
                 num_id = result['_number']
-                data[num_id] = GerritChange(result)
+                data[num_id] = GerritChange(result, self.patch_command)
 
         logger.debug('Review IDs from query: {}'.format(data.keys()))
 
@@ -361,6 +369,8 @@ def main():
                        action=ParseCSVs, help='topic to apply')
     parser.add_argument('-s', '--source', dest='repo_source', required=True,
                         help='Location of the repo sync checkout')
+    parser.add_argument('-C', '--checkout', action='store_true',
+                        help='When specified, patch_via_gerrit will checkout relevant changes rather than cherry pick')
 
     args = parser.parse_args()
 
@@ -398,15 +408,18 @@ def main():
 
     # Initialize class to allow connection to Gerrit URL, determine
     # type of starting parameters and then find all related reviews
-    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source)
+    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source, args.checkout)
 
     if args.review_ids:
+        logger.debug('Review Type: review_ids')
         id_type = 'review'
         review_ids = args.review_ids
     elif args.change_ids:
+        logger.debug('Review Type: change_ids')
         id_type = 'change'
         review_ids = args.change_ids
     else:
+        logger.debug('Review Type: topic')
         id_type = 'topic'
         review_ids = args.topics
 
