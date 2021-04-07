@@ -12,8 +12,10 @@ import argparse
 import configparser
 import contextlib
 import logging
+import json
 import os
 import os.path
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as EleTree
@@ -80,7 +82,7 @@ class ParseCSVs(argparse.Action):
 class GerritChange:
     """Encapsulation of relevant information for a given Gerrit review"""
 
-    def __init__(self, data):
+    def __init__(self, data, patch_command):
         """
         Initialize with key information for a Gerrit review, including
         information about related parents
@@ -99,10 +101,11 @@ class GerritChange:
 
         if 'anonymous http' in fetch_info:
             self.patch_command = \
-                fetch_info['anonymous http']['commands']['Cherry Pick']
+                fetch_info['anonymous http']['commands'][patch_command]
         else:  # only other option is SSH
-            self.patch_command = fetch_info['ssh']['commands']['Cherry Pick']
+            self.patch_command = fetch_info['ssh']['commands'][patch_command]
 
+        self.patch_command = re.sub('ssh://.*@', 'ssh://', self.patch_command)
 
 class GerritPatches:
     """
@@ -117,7 +120,7 @@ class GerritPatches:
     be applied to the repo sync
     """
 
-    def __init__(self, gerrit_url, user, passwd, repo_source):
+    def __init__(self, gerrit_url, user, passwd, repo_source, checkout=False):
         """Initial Gerrit connection and set base options"""
 
         auth = HTTPBasicAuth(user, passwd)
@@ -125,6 +128,7 @@ class GerritPatches:
         self.base_options = [
             'CURRENT_REVISION', 'CURRENT_COMMIT', 'DOWNLOAD_COMMANDS'
         ]
+        self.patch_command = 'Checkout' if checkout else 'Cherry Pick'
         self.repo_source = repo_source
 
     def query(self, query_string, options=None):
@@ -150,7 +154,7 @@ class GerritPatches:
         else:
             for result in results:
                 num_id = result['_number']
-                data[num_id] = GerritChange(result)
+                data[num_id] = GerritChange(result, self.patch_command)
 
         logger.debug('Review IDs from query: {}'.format(data.keys()))
 
@@ -202,14 +206,12 @@ class GerritPatches:
         # Search recursively up via the parents until no more
         # open reviews are found
         for parent in review.parents:
-            logger.debug('Querying on parent review ID: {}'.format(parent))
+            logger.debug('Querying on parent review sha: {}'.format(parent))
             p_review = self.query(
                 '/changes/?q=status:open+commit:{}'.format(parent)
             )
-
             if not p_review:
                 continue
-
             p_review_id = list(p_review.keys())[0]  # Always single element
             reviews.update(p_review)
             reviews.update(self.get_open_parents(p_review[p_review_id]))
@@ -226,7 +228,6 @@ class GerritPatches:
         topics), determine all relevant open reviews that will need
         to be applied to a repo sync via patching
         """
-
         all_reviews = dict()
         stack = list()
 
@@ -292,12 +293,26 @@ class GerritPatches:
                          if r_id not in all_reviews.keys()]
                     )
 
-                stack.extend(
-                    [r_id for r_id in self.get_open_parents(review)
-                     if r_id not in all_reviews.keys()]
-                )
+                #No need to get the parents When using git Checkout
+                #Checkout will get the parents automatically
+                #Get the parents when using cherry-pick
+                if self.patch_command != "Checkout":
+                    stack.extend(
+                        [r_id for r_id in self.get_open_parents(review)
+                         if r_id not in all_reviews.keys()]
+                    )
 
-        logger.debug('List of review IDs to apply: {}'.format(
+        #When using checkout, remove parents from the reviews.
+        #Checkout of a child will apply all its parents
+        if self.patch_command == "Checkout":
+            for r_id in sorted (all_reviews):
+                for p_id in self.get_open_parents(all_reviews[r_id]):
+                    if p_id in all_reviews:
+                        del all_reviews[p_id]
+                        logger.info('Remove {}.  Checkout of its child review {} '
+                            'already include the change.'.format(p_id, r_id))
+
+        logger.info('List of review IDs to apply: {}'.format(
             ', '.join([str(r_id) for r_id in all_reviews.keys()])
         ))
 
@@ -332,7 +347,6 @@ class GerritPatches:
             logger.error(exc)
             sys.exit(1)
 
-
 def main():
     """
     Parse the arguments, verify the repo sync exists, read and validate
@@ -361,6 +375,9 @@ def main():
                        action=ParseCSVs, help='topic to apply')
     parser.add_argument('-s', '--source', dest='repo_source', required=True,
                         help='Location of the repo sync checkout')
+    parser.add_argument('-C', '--checkout', action='store_true',
+                        help='When specified, patch_via_gerrit will checkout '
+                        'relevant changes rather than cherry pick')
 
     args = parser.parse_args()
 
@@ -398,15 +415,18 @@ def main():
 
     # Initialize class to allow connection to Gerrit URL, determine
     # type of starting parameters and then find all related reviews
-    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source)
+    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source, args.checkout)
 
     if args.review_ids:
+        logger.debug('Review Type: review_ids')
         id_type = 'review'
         review_ids = args.review_ids
     elif args.change_ids:
+        logger.debug('Review Type: change_ids')
         id_type = 'change'
         review_ids = args.change_ids
     else:
+        logger.debug('Review Type: topic')
         id_type = 'topic'
         review_ids = args.topics
 
