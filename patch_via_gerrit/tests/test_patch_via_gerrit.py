@@ -20,37 +20,68 @@ class TestGerritPatches:
     gerrit_patches = app.GerritPatches(os.getenv('gerrit_url'), os.getenv('gerrit_user'), os.getenv('gerrit_pass'), source_path)
 
     def reset(self):
-        self.gerrit_patches.seen_reviews = set()
+        self.gerrit_patches.applied_reviews = []
+        self.gerrit_patches.requested_reviews = []
         conftest.reset_checkout()
 
     def test_rest_get(self):
         # getting via rest API
         assert self.gerrit_patches.rest.get("/changes/?q=owner:self%20status:open")
 
+    def test_fail_to_get_one_review(self):
+        # landing on a sys.exit(1) if we request a review which can't be applied
+        self.gerrit_patches.requested_reviews = [111111]
+        self.gerrit_patches.get_reviews([111111], 'review')
+        with pytest.raises(SystemExit) as e:
+            self.gerrit_patches.check_requested_reviews_applied()
+        assert e.type == SystemExit
+        assert e.value.code == 1
+
     def test_get_one_review(self):
         # getting one review
-        reviews = self.gerrit_patches.get_reviews([134808], 'review')
-        assert list(reviews).sort() == [134808].sort()
+        reviews = list(self.gerrit_patches.get_reviews([134808], 'review'))
+        assert reviews == [134808]
+
+    def test_get_one_closed_review(self):
+        # getting one closed review
+        reviews = list(self.gerrit_patches.get_reviews([152371], 'review'))
+        assert reviews == []
 
     def test_get_two_reviews(self):
         # getting two reviews
-        reviews = self.gerrit_patches.get_reviews([134808, 134809], 'review')
-        assert list(reviews).sort() == [134808, 134809].sort()
+        reviews = list(self.gerrit_patches.get_reviews([134808, 134809], 'review'))
+        reviews.sort()
+        assert reviews == [134808, 134809]
 
     def test_get_changes_via_review_id(self):
         # getting a change via review id
         changes = self.gerrit_patches.get_changes_via_review_id(134808)
         assert changes[134808].change_id == 'Ic2e7bfd58bd4fcf3be5330338f9376f1a958cf6a'
 
+    def test_get_merged_changes_via_review_id(self):
+        # getting a merged change via review id, we want this to return nothing
+        # we only want to find closed changes if we've explicitly passed them
+        # as an argument via -r
+        changes = list(self.gerrit_patches.get_changes_via_review_id(152371))
+        assert changes == []
+
+    def test_get_merged_changes_via_review_id_when_requested(self):
+        # getting a change via review id when it has been specifically requested
+        # note: main() adds these to gerrit_patches.requested_reviews to make
+        # these easier to track + test
+        self.gerrit_patches.requested_reviews = [152371]
+        changes = self.gerrit_patches.get_changes_via_review_id(152371)
+        assert changes[152371].change_id == 'I9b798eac330661e49e7da02491a1506e3298bb19'
+
     def test_get_changes_via_change_id(self):
         # getting a review via a change id
-        changes = self.gerrit_patches.get_changes_via_change_id('Ic2e7bfd58bd4fcf3be5330338f9376f1a958cf6a')
-        assert list(changes) == [134808]
+        changes = list(self.gerrit_patches.get_changes_via_change_id('Ic2e7bfd58bd4fcf3be5330338f9376f1a958cf6a'))
+        assert changes == [134808]
 
     def test_get_changes_via_topic_id(self):
         # getting changes via a topic id
         # note: we don't use topics in gerrit, this just tests getting an empty response
-        changes = self.gerrit_patches.get_changes_via_topic_id('test')
+        changes = self.gerrit_patches.get_changes_via_topic_id('dummyvalue')
         assert not changes
 
     def test_get_open_parents(self):

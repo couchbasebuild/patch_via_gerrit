@@ -130,6 +130,13 @@ class GerritPatches:
         ]
         self.patch_command = 'Checkout' if checkout else 'Cherry Pick'
         self.repo_source = repo_source
+        # We need to track reviews which were specifically requested as these
+        # are applied regardless of their status. Derived reviews are only
+        # applied if they are still open
+        self.requested_reviews = []
+        # We track what's been applied to ensure at least the changes we
+        # specifically requested got done
+        self.applied_reviews = []
 
     def query(self, query_string, options=None):
         """
@@ -177,7 +184,9 @@ class GerritPatches:
             )
             sys.exit(1)
 
-        return self.query('/changes/?q=status:open+{}'.format(review_id))
+        status = "status:open+" if review_id not in self.requested_reviews else ""
+
+        return self.query('/changes/?q={}{}'.format(status, review_id))
 
     def get_changes_via_change_id(self, change_id):
         """Find all reviews for a given change ID"""
@@ -318,10 +327,23 @@ class GerritPatches:
 
         return all_reviews
 
+    def check_requested_reviews_applied(self):
+        # If one or more of our requested reviews doesn't appear in applied reviews,
+        # something the user asked for didn't happen. Error out with some info.
+        if any(item not in self.applied_reviews for item in self.requested_reviews):
+            print("ERROR: Failed to apply all requested patches")
+            print("Requested: {}".format(",".join([str(s) for s in self.requested_reviews])))
+            print("Applied: {}".format(",".join([str(s) for s in self.applied_reviews])))
+            sys.exit(1)
 
     def patch_repo_sync(self, review_ids, id_type):
         """ Patch the repo sync with the list of patch commands """
         reviews = self.get_reviews(review_ids, id_type)
+
+        if not reviews:
+            print("ERROR: No reviews to apply")
+            sys.exit(1)
+
         try:
             with cd(self.repo_source):
                 mf = EleTree.parse('.repo/manifest.xml')
@@ -337,12 +359,14 @@ class GerritPatches:
                         with cd(proj_info.attrib.get('path', review.project)):
                             subprocess.check_call(review.patch_command,
                                                 shell=True)
+                            self.applied_reviews.append(review_id)
                     except subprocess.CalledProcessError as exc:
                         raise RuntimeError(
                             'Patch for review {} failed: {}'.format(
                                 review_id, exc.output
                             )
                         )
+                self.check_requested_reviews_applied()
         except RuntimeError as exc:
             logger.error(exc)
             sys.exit(1)
@@ -421,6 +445,7 @@ def main():
         logger.debug('Review Type: review_ids')
         id_type = 'review'
         review_ids = args.review_ids
+        gerrit_patches.requested_reviews = args.review_ids
     elif args.change_ids:
         logger.debug('Review Type: change_ids')
         id_type = 'change'
