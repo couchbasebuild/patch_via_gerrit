@@ -10,7 +10,7 @@ python3 -m venv build/venv
 . build/venv/bin/activate
 
 echo Adding pyinstaller
-pip3 install pyinstaller
+pip3 install pyinstaller==4.2
 
 echo Installing patch_via_gerrit requirements
 pip3 install -r ${SCRIPTPATH}/requirements.txt

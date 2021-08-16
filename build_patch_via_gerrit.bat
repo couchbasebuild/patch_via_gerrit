@@ -10,7 +10,7 @@ python3 -m venv build/venv || goto error
 call .\build\venv\Scripts\activate.bat || goto error
 
 echo Adding pyinstaller
-pip3 install pyinstaller || goto error
+pip3 install pyinstaller==4.2 || goto error
 
 echo Installing certifi
 pip3 install certifi || goto error
