@@ -160,7 +160,7 @@ class GerritPatches:
             raise RuntimeError(exc)
         else:
             for result in results:
-                num_id = result['_number']
+                num_id = str(result['_number'])
                 data[num_id] = GerritChange(result, self.patch_command)
 
         logger.debug('Review IDs from query: {}'.format(data.keys()))
@@ -331,10 +331,12 @@ class GerritPatches:
         # If one or more of our requested reviews doesn't appear in applied reviews,
         # something the user asked for didn't happen. Error out with some info.
         if any(item not in self.applied_reviews for item in self.requested_reviews):
-            print("ERROR: Failed to apply all requested patches")
+            print("ERROR: Failed to apply all requested review IDs")
             print("Requested: {}".format(",".join([str(s) for s in self.requested_reviews])))
             print("Applied: {}".format(",".join([str(s) for s in self.applied_reviews])))
             sys.exit(1)
+        else:
+            print("All requested review IDs applied! {}".format(",".join([str(s) for s in self.requested_reviews])))
 
     def patch_repo_sync(self, review_ids, id_type):
         """ Patch the repo sync with the list of patch commands """
@@ -346,7 +348,15 @@ class GerritPatches:
 
         try:
             with cd(self.repo_source):
+
                 mf = EleTree.parse('.repo/manifest.xml')
+                # Handle newer-style "include" manifests
+                include_ele = mf.find('.//include')
+                if include_ele is not None:
+                    manifest_file = os.path.join(
+                        ".repo", "manifests", include_ele.attrib.get("name")
+                    )
+                    mf = EleTree.parse(manifest_file)
 
                 for review_id in sorted(reviews.keys()):
                     review = reviews[review_id]
