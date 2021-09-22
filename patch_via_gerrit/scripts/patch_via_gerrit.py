@@ -23,6 +23,7 @@ import xml.etree.ElementTree as EleTree
 import requests.exceptions
 
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth
+from _version import __version__, __build__
 
 
 # Set up logging and handler
@@ -412,6 +413,9 @@ def main():
     parser.add_argument('-C', '--checkout', action='store_true',
                         help='When specified, patch_via_gerrit will checkout '
                         'relevant changes rather than cherry pick')
+    parser.add_argument('-V', '--version', action="version",
+                        help='Display patch_via_gerrit version information',
+                        version=f"patch_via_gerrit version {__version__} (build {__build__})")
 
     args = parser.parse_args()
 
