@@ -2,17 +2,19 @@
 
 These tests aim to cover at least the basic things we don't want to break.
 
-To start, create a virtualenv in the parent of this folder (alongside version.py and the scripts+tests directories)
+To start, create a virtualenv somewhere:
 
 ```shell
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-Install package requirements, pytest and pytest-cov
+cd into the top level directory of this repository.
+
+Install package requirements, pytest and pytest-cov:
 
 ```shell
-pip3 install -r ../requirements.txt
+pip3 install -r requirements.txt
 pip3 install pytest pytest-cov
 ```
 

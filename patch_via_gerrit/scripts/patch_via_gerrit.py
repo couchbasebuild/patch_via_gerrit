@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 
 """
 Basic program to apply a set of patches from various Gerrit reviews
@@ -23,15 +23,17 @@ import xml.etree.ElementTree as EleTree
 import requests.exceptions
 
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth
-from _version import __version__, __build__
+from patch_via_gerrit.scripts._version import __version__, __build__
 
 
 # Set up logging and handler
 logger = logging.getLogger('patch_via_gerrit')
-logger.setLevel(logging.INFO)
-
-ch = logging.StreamHandler()
-logger.addHandler(ch)
+logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(levelname)s: %(message)s')
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 class InvalidUpstreamException(Exception):
     def __init__(self, project):
@@ -48,15 +50,10 @@ def cd(path):
     try:
         os.chdir(path)
     except OSError:
-        raise RuntimeError('Can not change directory to {}'.format(path))
+        raise RuntimeError(f'Can not change directory to {path}')
 
     try:
         yield
-    except Exception:
-        logger.error(
-            'Exception caught: {}'.format(' - '.join(sys.exc_info()[:2]))
-        )
-        raise RuntimeError('Failed code in new directory {}'.format(path))
     finally:
         os.chdir(cwd)
 
@@ -139,7 +136,7 @@ class GerritPatches:
         # specifically requested got done
         self.applied_reviews = []
 
-    def query(self, query_string, options=None):
+    def query(self, query_string, options=None, quiet=False):
         """
         Get results from Gerrit for a given query string, returning
         a dictionary keyed off the relevant review IDs, the values
@@ -155,7 +152,6 @@ class GerritPatches:
 
         try:
             q_string = query_string + opt_string
-            logger.debug('Query string is: {}'.format(q_string))
             results = self.rest.get(q_string)
         except requests.exceptions.HTTPError as exc:
             raise RuntimeError(exc)
@@ -163,47 +159,42 @@ class GerritPatches:
             for result in results:
                 num_id = str(result['_number'])
                 data[num_id] = GerritChange(result, self.patch_command)
-
-        logger.debug('Review IDs from query: {}'.format(data.keys()))
+        if not quiet:
+            logger.debug(f'  Review IDs from query: {", ".join(list(data))}')
 
         return data
 
     def get_changes_via_review_id(self, review_id):
         """Find all reviews for a given review ID"""
 
-        logger.debug('Querying on review ID {}'.format(review_id))
-
         #Query review ID directly first to ensure it exist and is readable
         #This filters out invalid and inaccessible "prviate" review IDs.
         #A "private" review ID is a review marked "private" by the owner so that no one else can see it.
         #Only gerrit admin and users with "View Private Changes" permission can see a "private" review.
-        if ( len(self.query('/changes/?q={}'.format(review_id))) == 0 ):
+        logger.debug(f'Ensuring review ID {review_id} is not private')
+        if ( len(self.query(f'/changes/?q={review_id}', quiet=True)) == 0 ):
             logger.error(
-                'Query returns no data for {}!\n'
+                f'Query returns no data for {review_id}!\n'
                 'It is either invalid or marked as "private" by its owner.\n'
-                'A "private" review is only accessible by users with "View Private Changes" permission.'.format(review_id)
+                'A "private" review is only accessible by users with "View Private Changes" permission.'
             )
             sys.exit(1)
 
+        logger.debug(f'Querying on review ID {review_id}')
         status = "status:open+" if review_id not in self.requested_reviews else ""
-
-        return self.query('/changes/?q={}{}'.format(status, review_id))
+        return self.query(f'/changes/?q={status}{review_id}')
 
     def get_changes_via_change_id(self, change_id):
         """Find all reviews for a given change ID"""
 
-        logger.debug('Querying on change ID {}'.format(change_id))
-
-        return self.query(
-            '/changes/?q=status:open+change:{}'.format(change_id)
-        )
+        logger.debug(f'Querying on change ID {change_id}')
+        return self.query(f'/changes/?q=status:open+change:{change_id}')
 
     def get_changes_via_topic_id(self, topic):
         """Find all reviews for a given topic"""
 
-        logger.debug('Querying on topic {}'.format(topic))
-
-        return self.query('/changes/?q=status:open+topic:{}'.format(topic))
+        logger.debug(f'Querying on topic {topic}')
+        return self.query(f'/changes/?q=status:open+topic:{topic}')
 
     def get_open_parents(self, review):
         """Find all open parent reviews for a given review"""
@@ -216,10 +207,8 @@ class GerritPatches:
         # Search recursively up via the parents until no more
         # open reviews are found
         for parent in review.parents:
-            logger.debug('Querying on parent review sha: {}'.format(parent))
-            p_review = self.query(
-                '/changes/?q=status:open+commit:{}'.format(parent)
-            )
+            logger.debug(f'Querying on parent review sha: {parent}')
+            p_review = self.query(f'/changes/?q=status:open+commit:{parent}')
             if not p_review:
                 continue
             p_review_id = list(p_review.keys())[0]  # Always single element
@@ -246,7 +235,7 @@ class GerritPatches:
         # from the results
         for initial_arg in initial_args:
             reviews = getattr(
-                self, 'get_changes_via_{}_id'.format(id_type)
+                self, f'get_changes_via_{id_type}_id'
             )(initial_arg)
             review_ids = [r_id for r_id in reviews.keys()]
             logger.debug('Initial review IDs: {}'.format(
@@ -254,6 +243,8 @@ class GerritPatches:
             ))
 
             stack.extend(review_ids)
+
+        logger.info("Finding dependent reviews...")
 
         # From the stack, check each entry and add to the final set
         # of reviews if not already there and we have not already
@@ -319,10 +310,11 @@ class GerritPatches:
                 for p_id in self.get_open_parents(all_reviews[r_id]):
                     if p_id in all_reviews:
                         del all_reviews[p_id]
-                        logger.info('Remove {}.  Checkout of its child review {} '
-                            'already include the change.'.format(p_id, r_id))
+                        logger.info(
+                            f'Remove {p_id}.  Checkout of its child review {r_id} '
+                            'already include the change.')
 
-        logger.info('List of review IDs to apply: {}'.format(
+        logger.info('Final list of review IDs to apply: {}'.format(
             ', '.join([str(r_id) for r_id in all_reviews.keys()])
         ))
 
@@ -337,10 +329,13 @@ class GerritPatches:
             print("Applied: {}".format(",".join([str(s) for s in self.applied_reviews])))
             sys.exit(1)
         else:
-            print("All requested review IDs applied! {}".format(",".join([str(s) for s in self.requested_reviews])))
+            logger.info("All requested review IDs applied! {}".format(
+                ",".join([str(s) for s in self.requested_reviews]))
+            )
 
     def patch_repo_sync(self, review_ids, id_type):
         """ Patch the repo sync with the list of patch commands """
+
         reviews = self.get_reviews(review_ids, id_type)
 
         if not reviews:
@@ -361,9 +356,9 @@ class GerritPatches:
 
                 for review_id in sorted(reviews.keys()):
                     review = reviews[review_id]
-                    logger.debug('Project to patch: {}'.format(review.project))
+                    logger.info(f'***** Applying review {review_id} to project {review.project}:')
                     proj_info = mf.find(
-                        './/project[@name="{}"]'.format(review.project)
+                        f'.//project[@name="{review.project}"]'
                     )
 
                     try:
@@ -373,10 +368,9 @@ class GerritPatches:
                             self.applied_reviews.append(review_id)
                     except subprocess.CalledProcessError as exc:
                         raise RuntimeError(
-                            'Patch for review {} failed: {}'.format(
-                                review_id, exc.output
-                            )
+                            f'Patch for review {review_id} failed: {exc.output}'
                         )
+                    logger.info(f'***** Done applying review {review_id} to project {review.project}')
                 self.check_requested_reviews_applied()
         except RuntimeError as exc:
             logger.error(exc)
@@ -392,6 +386,8 @@ def main():
     # PyInstaller binaries get LD_LIBRARY_PATH set for them, and that
     # can have unwanted side-effects for our subprocesses.
     os.environ.pop("LD_LIBRARY_PATH", None)
+
+    version_string = f"patch_via_gerrit version {__version__} (build {__build__})"
 
     parser = argparse.ArgumentParser(
         description='Patch repo sync with requested Gerrit reviews'
@@ -415,13 +411,12 @@ def main():
                         'relevant changes rather than cherry pick')
     parser.add_argument('-V', '--version', action="version",
                         help='Display patch_via_gerrit version information',
-                        version=f"patch_via_gerrit version {__version__} (build {__build__})")
-
+                        version=version_string)
     args = parser.parse_args()
 
     # Set logging to debug level on stream handler if --debug was set
     if args.debug:
-        logger.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG)
 
     if not os.path.isdir(args.repo_source):
         logger.error(
@@ -434,9 +429,7 @@ def main():
 
     if 'main' not in gerrit_config.sections():
         logger.error(
-            'Invalid or unable to read config file "{}"'.format(
-                args.gerrit_config
-            )
+            f'Invalid or unable to read config file "{args.gerrit_config}"'
         )
         sys.exit(1)
 
@@ -456,21 +449,18 @@ def main():
     gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source, args.checkout)
 
     if args.review_ids:
-        logger.debug('Review Type: review_ids')
         id_type = 'review'
         review_ids = args.review_ids
         gerrit_patches.requested_reviews = args.review_ids
     elif args.change_ids:
-        logger.debug('Review Type: change_ids')
         id_type = 'change'
         review_ids = args.change_ids
     else:
-        logger.debug('Review Type: topic')
         id_type = 'topic'
         review_ids = args.topics
 
-    logger.debug('Review IDs: {}'.format(', '.join(review_ids)))
-    logger.debug('Review type: {}'.format(id_type))
+    logger.info(f"******** {version_string} ********")
+    logger.info(f"Initial request to patch {id_type}s: {', '.join(review_ids)}")
 
     gerrit_patches.patch_repo_sync(review_ids, id_type)
 
