@@ -32,5 +32,5 @@ mkdir /tmp/code
 Run the tests,
 
 ```shell
-source_path=/tmp/code gerrit_url=http://example.com gerrit_user=user gerrit_pass=pass pytest --cov=patch_via_gerrit -s -v
+PYTHONPATH=. source_path=/tmp/code gerrit_url=http://example.com gerrit_user=user gerrit_pass=pass pytest --cov=patch_via_gerrit -s -v
 ```

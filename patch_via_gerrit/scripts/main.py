@@ -61,7 +61,7 @@ def cd(path):
 class ParseCSVs(argparse.Action):
     """Parse comma separated lists"""
 
-    def __call__(self, parser, namespace, values, option_string=None):
+    def __call__(self, parser, namespace, arguments, option_string=None):
         """
         Ensure all values separated by commas are parsed out; note that
         while quoted strings with spaces are preserved, a comma within
@@ -70,9 +70,10 @@ class ParseCSVs(argparse.Action):
 
         results = list()
 
-        for value in values:
-            value = value.strip(',').split(',')
-            results.extend(value)
+        for arg in arguments:
+            for value in arg.split(','):
+                if len(value) > 0:
+                    results.append(value)
 
         setattr(namespace, self.dest, results)
 
@@ -399,11 +400,11 @@ def main():
                         default='patch_via_gerrit.ini')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-r', '--review-id', dest='review_ids', nargs='+',
-                       action=ParseCSVs, help='review ID to apply')
+                       action=ParseCSVs, help='review IDs to apply (comma-separated)')
     group.add_argument('-g', '--change-id', dest='change_ids', nargs='+',
-                       action=ParseCSVs, help='change ID to apply')
+                       action=ParseCSVs, help='change IDs to apply (comma-separated)')
     group.add_argument('-t', '--topic', dest='topics', nargs='+',
-                       action=ParseCSVs, help='topic to apply')
+                       action=ParseCSVs, help='topics to apply (comma-separated)')
     parser.add_argument('-s', '--source', dest='repo_source', required=True,
                         help='Location of the repo sync checkout')
     parser.add_argument('-C', '--checkout', action='store_true',
@@ -460,6 +461,10 @@ def main():
         review_ids = args.topics
 
     logger.info(f"******** {version_string} ********")
+    if review_ids is None:
+        logger.info("No patches requested, so doing nothing")
+        sys.exit(0)
+
     logger.info(f"Initial request to patch {id_type}s: {', '.join(review_ids)}")
 
     gerrit_patches.patch_repo_sync(review_ids, id_type)

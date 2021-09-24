@@ -2,7 +2,9 @@ setlocal EnableDelayedExpansion
 @echo on
 
 set START_DIR="%CD%"
-set SCRIPTPATH=%~dp0
+set SCRIPTDIR=%~dp0
+rem Get directory containing script without trailing \
+set SCRIPTPATH=%SCRIPTDIR:~0,-1%
 
 echo Setting up Python virtual environment
 if not exist "build\" (
@@ -27,11 +29,11 @@ rmdir /s /q %VERSIONPATH%
 mkdir %VERSIONPATH%
 
 if not "%VERSION%" == "" (
-    set PYINSTPATHS=%VERSIONPATH%;%SCRIPTPATH%\patch_via_gerrit\scripts
+    set PYINSTPATHS=%VERSIONPATH%;%SCRIPTPATH%
     echo __version__ = "%VERSION%" > %VERSIONPATH%\_buildversion.py
     echo __build__ = "%BLD_NUM%" >> %VERSIONPATH%\_buildversion.py
 ) else (
-    set PYINSTPATHS=%SCRIPTPATH%\patch_via_gerrit\scripts
+    set PYINSTPATHS=%SCRIPTPATH%
 )
 
 echo Compiling patch_via_gerrit
@@ -44,7 +46,8 @@ pyinstaller --workpath %PYINSTDIR% ^
     --distpath dist --noconfirm ^
     --onefile ^
     --paths "%PYINSTPATHS%" ^
-    "%SCRIPTPATH%\patch_via_gerrit\scripts\patch_via_gerrit.py" || goto error
+    --name patch_via_gerrit ^
+    "%SCRIPTPATH%\patch_via_gerrit\scripts\main.py" || goto error
 
 goto eof
 

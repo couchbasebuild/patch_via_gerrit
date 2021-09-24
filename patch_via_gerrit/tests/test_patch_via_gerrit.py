@@ -1,6 +1,6 @@
 import os
 import pytest
-import patch_via_gerrit.scripts.patch_via_gerrit as app
+import patch_via_gerrit.scripts.main as app
 import patch_via_gerrit.tests.conftest as conftest
 
 def test_check_env_vars():

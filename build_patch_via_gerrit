@@ -48,5 +48,6 @@ pyinstaller --log-level DEBUG \
     --specpath ${PYINSTDIR} \
     --distpath dist --noconfirm \
     --onefile \
-    --paths "${VERSIONPATH}:${SCRIPTPATH}/patch_via_gerrit/scripts" \
-    ${SCRIPTPATH}/patch_via_gerrit/scripts/patch_via_gerrit.py
+    --paths "${VERSIONPATH}:${SCRIPTPATH}" \
+    --name patch_via_gerrit \
+    ${SCRIPTPATH}/patch_via_gerrit/scripts/main.py
