@@ -119,7 +119,7 @@ class GerritPatches:
     be applied to the repo sync
     """
 
-    def __init__(self, gerrit_url, user, passwd, repo_source, checkout=False):
+    def __init__(self, gerrit_url, user, passwd, checkout=False):
         """Initial Gerrit connection and set base options"""
 
         auth = HTTPBasicAuth(user, passwd)
@@ -128,7 +128,6 @@ class GerritPatches:
             'CURRENT_REVISION', 'CURRENT_COMMIT', 'DOWNLOAD_COMMANDS'
         ]
         self.patch_command = 'Checkout' if checkout else 'Cherry Pick'
-        self.repo_source = repo_source
         # We need to track reviews which were specifically requested as these
         # are applied regardless of their status. Derived reviews are only
         # applied if they are still open
@@ -153,6 +152,7 @@ class GerritPatches:
 
         try:
             q_string = query_string + opt_string
+            logger.debug(f"  Query is: {q_string}")
             results = self.rest.get(q_string)
         except requests.exceptions.HTTPError as exc:
             raise RuntimeError(exc)
@@ -325,57 +325,68 @@ class GerritPatches:
         # If one or more of our requested reviews doesn't appear in applied reviews,
         # something the user asked for didn't happen. Error out with some info.
         if any(item not in self.applied_reviews for item in self.requested_reviews):
-            print("ERROR: Failed to apply all requested review IDs")
-            print("Requested: {}".format(",".join([str(s) for s in self.requested_reviews])))
-            print("Applied: {}".format(",".join([str(s) for s in self.applied_reviews])))
+            logger.critical(
+                "Failed to apply all explicitly-requested review IDs! "
+                f'Requested: {self.requested_reviews} '
+                f'Applied: {self.applied_reviews}'
+            )
             sys.exit(1)
         else:
-            logger.info("All requested review IDs applied! {}".format(
-                ",".join([str(s) for s in self.requested_reviews]))
+            logger.info(
+                f"All explicitly-requested review IDs applied! {self.requested_reviews}"
             )
 
     def patch_repo_sync(self, review_ids, id_type):
-        """ Patch the repo sync with the list of patch commands """
+        """
+        Patch the repo sync with the list of patch commands. Repo
+        sync is presumed to be in current working directory.
+        """
 
+        # Compute full set of reviews
         reviews = self.get_reviews(review_ids, id_type)
 
-        if not reviews:
-            print("ERROR: No reviews to apply")
-            sys.exit(1)
+        # Read in the manifest. We ask repo to report the manifest, because
+        # that automatically filters out projects that were not synced due
+        # to groups ("repo init -g ....", or being in "notdefault" group).
+        manixml = subprocess.check_output(['repo', 'manifest'])
+        mf = EleTree.fromstring(manixml)
 
-        try:
-            with cd(self.repo_source):
+        # Iterate over all discovered reviews, applying the changes
+        for review_id in sorted(reviews.keys()):
+            review = reviews[review_id]
+            proj_info = mf.find(
+                f'.//project[@name="{review.project}"]'
+            )
+            if proj_info is None:
+                logger.info(
+                    f"***** NOTE: ignoring review ID {review_id} for project "
+                    f"{review.project} that is either not part of the "
+                    "manifest, or was excluded due to manifest group filters."
+                )
+                continue
 
-                mf = EleTree.parse('.repo/manifest.xml')
-                # Handle newer-style "include" manifests
-                include_ele = mf.find('.//include')
-                if include_ele is not None:
-                    manifest_file = os.path.join(
-                        ".repo", "manifests", include_ele.attrib.get("name")
-                    )
-                    mf = EleTree.parse(manifest_file)
+            path = proj_info.attrib.get('path', review.project)
+            if not os.path.exists(path):
+                # Project is missing on disk, but we expected to find it:
+                # that's bad.
+                logger.critical(
+                    f'***** Project {review.project} missing on disk! '
+                    f'Expected to be in {path}'
+                )
+                sys.exit(5)
 
-                for review_id in sorted(reviews.keys()):
-                    review = reviews[review_id]
-                    logger.info(f'***** Applying review {review_id} to project {review.project}:')
-                    proj_info = mf.find(
-                        f'.//project[@name="{review.project}"]'
-                    )
-
-                    try:
-                        with cd(proj_info.attrib.get('path', review.project)):
-                            subprocess.check_call(review.patch_command,
-                                                shell=True)
-                            self.applied_reviews.append(review_id)
-                    except subprocess.CalledProcessError as exc:
-                        raise RuntimeError(
-                            f'Patch for review {review_id} failed: {exc.output}'
-                        )
-                    logger.info(f'***** Done applying review {review_id} to project {review.project}')
-                self.check_requested_reviews_applied()
-        except RuntimeError as exc:
-            logger.error(exc)
-            sys.exit(1)
+            try:
+                logger.info(f'***** Applying review {review_id} to project {review.project}:')
+                with cd(proj_info.attrib.get('path', review.project)):
+                    subprocess.check_call(review.patch_command,
+                                        shell=True)
+                    self.applied_reviews.append(review_id)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    f'Patch for review {review_id} failed: {exc.output}'
+                )
+            logger.info(f'***** Done applying review {review_id} to project {review.project}')
+        self.check_requested_reviews_applied()
 
 def main():
     """
@@ -410,7 +421,7 @@ def main():
     parser.add_argument('-C', '--checkout', action='store_true',
                         help='When specified, patch_via_gerrit will checkout '
                         'relevant changes rather than cherry pick')
-    parser.add_argument('-V', '--version', action="version",
+    parser.add_argument('-V', '--version', action='version',
                         help='Display patch_via_gerrit version information',
                         version=version_string)
     args = parser.parse_args()
@@ -421,9 +432,10 @@ def main():
 
     if not os.path.isdir(args.repo_source):
         logger.error(
-            'Path for repo sync checkout doesn\'t exist.  Aborting...'
+            "Path for repo sync checkout doesn't exist.  Aborting..."
         )
         sys.exit(1)
+    os.chdir(args.repo_source)
 
     gerrit_config = configparser.ConfigParser()
     gerrit_config.read(args.gerrit_config)
@@ -447,7 +459,7 @@ def main():
 
     # Initialize class to allow connection to Gerrit URL, determine
     # type of starting parameters and then find all related reviews
-    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.repo_source, args.checkout)
+    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.checkout)
 
     if args.review_ids:
         id_type = 'review'

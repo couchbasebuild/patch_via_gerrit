@@ -1,4 +1,5 @@
 import os
+import shutil
 import pytest
 import patch_via_gerrit.scripts.main as app
 import patch_via_gerrit.tests.conftest as conftest
@@ -17,12 +18,17 @@ def test_cd():
 
 class TestGerritPatches:
     source_path = os.getenv('source_path')
-    gerrit_patches = app.GerritPatches(os.getenv('gerrit_url'), os.getenv('gerrit_user'), os.getenv('gerrit_pass'), source_path)
+    gerrit_patches = app.GerritPatches(
+        os.getenv('gerrit_url'),
+        os.getenv('gerrit_user'),
+        os.getenv('gerrit_pass')
+    )
 
     def reset(self):
         self.gerrit_patches.applied_reviews = []
         self.gerrit_patches.requested_reviews = []
         conftest.reset_checkout()
+        os.chdir(self.source_path)
 
     def test_rest_get(self):
         # getting via rest API
@@ -138,3 +144,13 @@ class TestGerritPatches:
         assert  os.path.exists(f'{self.source_path}/tlm/test/change4a') \
             and not os.path.exists(f'{self.source_path}/tlm/test/change4b') \
             and os.path.exists(f'{self.source_path}/geocouch/test/change4c')
+
+    def test_patch_repo_sync_missing_directory(self):
+        # applying a change where a linked change is to a directory
+        # that is unexpectedly missing - should fail
+        self.reset()
+        shutil.rmtree(os.path.join(self.source_path, "tlm"))
+        with pytest.raises(SystemExit) as e:
+            self.gerrit_patches.patch_repo_sync(['134874'], 'review')
+        assert e.type == SystemExit
+        assert e.value.code == 5

@@ -24,7 +24,11 @@ Pull source to a target folder:
 mkdir /tmp/code
 (
     cd /tmp/code
-    repo init --no-repo-verify --repo-url=git://github.com/couchbasedeps/git-repo -u git://github.com/couchbase/manifest -m couchbase-server/cheshire-cat.xml -g all '--reference=~/reporef'
+    repo init --no-repo-verify \
+        --repo-url=git://github.com/couchbasedeps/git-repo \
+        -u git://github.com/couchbase/manifest \
+        -m couchbase-server/cheshire-cat.xml \
+        -g name:tlm,name:geocouch
     repo sync --jobs=8
 )
 ```
