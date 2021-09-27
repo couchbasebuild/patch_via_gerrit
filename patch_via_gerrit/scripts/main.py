@@ -86,6 +86,7 @@ class GerritChange:
         Initialize with key information for a Gerrit review, including
         information about related parents
         """
+        self._number = str(data['_number'])
         self.status = data['status']
         self.project = data['project']
         self.branch = data['branch']
@@ -168,10 +169,10 @@ class GerritPatches:
     def get_changes_via_review_id(self, review_id):
         """Find all reviews for a given review ID"""
 
-        #Query review ID directly first to ensure it exist and is readable
-        #This filters out invalid and inaccessible "prviate" review IDs.
-        #A "private" review ID is a review marked "private" by the owner so that no one else can see it.
-        #Only gerrit admin and users with "View Private Changes" permission can see a "private" review.
+        # Query review ID directly first to ensure it exist and is readable
+        # This filters out invalid and inaccessible "prviate" review IDs.
+        # A "private" review ID is a review marked "private" by the owner so that no one else can see it.
+        # Only gerrit admin and users with "View Private Changes" permission can see a "private" review.
         logger.debug(f'Ensuring review ID {review_id} is not private')
         if ( len(self.query(f'/changes/?q={review_id}', quiet=True)) == 0 ):
             logger.error(
@@ -295,17 +296,16 @@ class GerritPatches:
                          if r_id not in all_reviews.keys()]
                     )
 
-                #No need to get the parents When using git Checkout
-                #Checkout will get the parents automatically
-                #Get the parents when using cherry-pick
+                # No need to get the parents When using git Checkout
+                # Checkout will get the parents automatically
                 if self.patch_command != "Checkout":
                     stack.extend(
                         [r_id for r_id in self.get_open_parents(review)
                          if r_id not in all_reviews.keys()]
                     )
 
-        #When using checkout, remove parents from the reviews.
-        #Checkout of a child will apply all its parents
+        # When using checkout, remove parents from the reviews.
+        # Checkout of a child will apply all its parents
         if self.patch_command == "Checkout":
             for r_id in sorted (all_reviews):
                 for p_id in self.get_open_parents(all_reviews[r_id]):
@@ -336,6 +336,34 @@ class GerritPatches:
                 f"All explicitly-requested review IDs applied! {self.requested_reviews}"
             )
 
+    def apply_single_review(self, review, proj_path):
+        """
+        Given a single review object from Gerrit and a path, apply
+        the git change to that path (using either checkout or cherry-pick
+        as requested).
+        """
+
+        if not os.path.exists(proj_path):
+            # Project is missing on disk, but we expected to find it:
+            # that's bad.
+            logger.critical(
+                f'***** Project {review.project} missing on disk! '
+                f'Expected to be in {proj_path}'
+            )
+            sys.exit(5)
+
+        try:
+            logger.info(f'***** Applying review {review._number} to project {review.project}:')
+            with cd(proj_path):
+                subprocess.check_call(review.patch_command, shell=True)
+                self.applied_reviews.append(review._number)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f'Patch for review {review.id} failed: {exc.output}'
+            )
+        logger.info(f'***** Done applying review {review._number} to project {review.project}')
+
+
     def patch_repo_sync(self, review_ids, id_type):
         """
         Patch the repo sync with the list of patch commands. Repo
@@ -344,6 +372,24 @@ class GerritPatches:
 
         # Compute full set of reviews
         reviews = self.get_reviews(review_ids, id_type)
+
+        # Pull out any changes for the 'manifest' project and apply them
+        # first, to the local repo manifest. If there are any such changes,
+        # re-run repo sync afterwards.
+        manifest_changes_found = False
+        for review_id in sorted(reviews.keys()):
+            review = reviews[review_id]
+            if review.project == "manifest":
+                manifest_changes_found = True
+                del reviews[review_id]
+                self.apply_single_review(
+                    review,
+                    os.path.join(".repo", "manifests")
+                )
+
+        # If there were manifest changes, re-run "repo sync"
+        if manifest_changes_found:
+            subprocess.check_call(['repo', 'sync', '--jobs=4'])
 
         # Read in the manifest. We ask repo to report the manifest, because
         # that automatically filters out projects that were not synced due
@@ -366,26 +412,7 @@ class GerritPatches:
                 continue
 
             path = proj_info.attrib.get('path', review.project)
-            if not os.path.exists(path):
-                # Project is missing on disk, but we expected to find it:
-                # that's bad.
-                logger.critical(
-                    f'***** Project {review.project} missing on disk! '
-                    f'Expected to be in {path}'
-                )
-                sys.exit(5)
-
-            try:
-                logger.info(f'***** Applying review {review_id} to project {review.project}:')
-                with cd(proj_info.attrib.get('path', review.project)):
-                    subprocess.check_call(review.patch_command,
-                                        shell=True)
-                    self.applied_reviews.append(review_id)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError(
-                    f'Patch for review {review_id} failed: {exc.output}'
-                )
-            logger.info(f'***** Done applying review {review_id} to project {review.project}')
+            self.apply_single_review(review, path)
         self.check_requested_reviews_applied()
 
 def main():

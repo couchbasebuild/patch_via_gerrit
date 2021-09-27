@@ -5,11 +5,10 @@ import patch_via_gerrit.scripts.main as app
 import patch_via_gerrit.tests.conftest as conftest
 
 def test_check_env_vars():
-    source_path = os.getenv('source_path')
     gerrit_url = os.getenv('gerrit_url')
     gerrit_user = os.getenv('gerrit_user')
     gerrit_pass = os.getenv('gerrit_pass')
-    if None in [source_path, gerrit_url, gerrit_user, gerrit_pass]:
+    if None in [gerrit_url, gerrit_user, gerrit_pass]:
         pytest.exit("Missing environment variable/s")
 
 def test_cd():
@@ -17,7 +16,6 @@ def test_cd():
         assert os.getcwd() == "/usr/bin"
 
 class TestGerritPatches:
-    source_path = os.getenv('source_path')
     gerrit_patches = app.GerritPatches(
         os.getenv('gerrit_url'),
         os.getenv('gerrit_user'),
@@ -28,7 +26,7 @@ class TestGerritPatches:
         self.gerrit_patches.applied_reviews = []
         self.gerrit_patches.requested_reviews = []
         conftest.reset_checkout()
-        os.chdir(self.source_path)
+        os.chdir(conftest.source_path)
 
     def test_rest_get(self):
         # getting via rest API
@@ -99,29 +97,29 @@ class TestGerritPatches:
         # applying a single patch on master
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134808'], 'review')
-        assert os.path.exists(f'{self.source_path}/tlm/test/change1')
+        assert os.path.exists(f'{conftest.source_path}/tlm/test/change1')
 
     def test_patch_repo_sync_madhatter_branch(self):
         # applying a single patch on mad hatter (should be applied because although manifest points at master
         # for that project, we are passing this review explicitly)
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134811'], 'review')
-        assert os.path.exists(f'{self.source_path}/tlm/test/change3')
+        assert os.path.exists(f'{conftest.source_path}/tlm/test/change3')
 
     def test_patch_repo_sync_master_branch_shared_change_id(self):
         # applying a single patch on the master branch, which shares its change_id with a similar change on mad-hatter
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134812'], 'review')
-        assert os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and not os.path.exists(f'{self.source_path}/tlm/test/change4b')
+        assert os.path.exists(f'{conftest.source_path}/tlm/test/change4a') \
+            and not os.path.exists(f'{conftest.source_path}/tlm/test/change4b')
 
     def test_patch_repo_sync_mad_hatter_branch_shared_change_id(self):
         # applying a single patch on the mad-hatter branch, which shares its change_id with a similar change on master
         # only mad-hatter change should apply, as it was explicitly specified
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134814'], 'review')
-        assert not os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and os.path.exists(f'{self.source_path}/tlm/test/change4b')
+        assert not os.path.exists(f'{conftest.source_path}/tlm/test/change4a') \
+            and os.path.exists(f'{conftest.source_path}/tlm/test/change4b')
 
     def test_patch_repo_sync_multiple_changes_with_shared_id_by_review_id(self):
         # applying multiple changes, one of which:
@@ -130,10 +128,10 @@ class TestGerritPatches:
         #   shares its change_id with a change in geocouch which *should* be applied
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134808', '134814'], 'review')
-        assert os.path.exists(f'{self.source_path}/tlm/test/change1') \
-            and not os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and os.path.exists(f'{self.source_path}/tlm/test/change4b') \
-            and os.path.exists(f'{self.source_path}/geocouch/test/change4c')
+        assert os.path.exists(f'{conftest.source_path}/tlm/test/change1') \
+            and not os.path.exists(f'{conftest.source_path}/tlm/test/change4a') \
+            and os.path.exists(f'{conftest.source_path}/tlm/test/change4b') \
+            and os.path.exists(f'{conftest.source_path}/geocouch/test/change4c')
 
     def test_patch_repo_sync_multiple_changes_with_shared_id_by_review_id_2(self):
         # applying a single geocouch change which shares a change ID with:
@@ -141,16 +139,23 @@ class TestGerritPatches:
         #   a tlm/mad-hatter change (which should be ignored)
         self.reset()
         self.gerrit_patches.patch_repo_sync(['134874'], 'review')
-        assert  os.path.exists(f'{self.source_path}/tlm/test/change4a') \
-            and not os.path.exists(f'{self.source_path}/tlm/test/change4b') \
-            and os.path.exists(f'{self.source_path}/geocouch/test/change4c')
+        assert os.path.exists(f'{conftest.source_path}/tlm/test/change4a') \
+            and not os.path.exists(f'{conftest.source_path}/tlm/test/change4b') \
+            and os.path.exists(f'{conftest.source_path}/geocouch/test/change4c')
 
     def test_patch_repo_sync_missing_directory(self):
         # applying a change where a linked change is to a directory
         # that is unexpectedly missing - should fail
         self.reset()
-        shutil.rmtree(os.path.join(self.source_path, "tlm"))
+        shutil.rmtree(os.path.join(conftest.source_path, "tlm"))
         with pytest.raises(SystemExit) as e:
             self.gerrit_patches.patch_repo_sync(['134874'], 'review')
         assert e.type == SystemExit
         assert e.value.code == 5
+
+    def test_patch_repo_sync_manifest_project_change(self):
+        # applying a change to the manifest repository itself, linked to a
+        # change to the newly-added project via a topic
+        self.reset()
+        self.gerrit_patches.patch_repo_sync(['162331'], 'review')
+        assert os.path.exists(f'{conftest.source_path}/mossScope/test/change5')
