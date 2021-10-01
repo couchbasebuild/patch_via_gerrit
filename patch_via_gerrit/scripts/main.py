@@ -353,7 +353,7 @@ class GerritPatches:
             sys.exit(5)
 
         try:
-            logger.info(f'***** Applying review {review._number} to project {review.project}:')
+            logger.info(f'***** Applying http://review.couchbase.org/{review._number} to project {review.project}:')
             with cd(proj_path):
                 subprocess.check_call(review.patch_command, shell=True)
                 self.applied_reviews.append(review._number)
@@ -361,7 +361,7 @@ class GerritPatches:
             raise RuntimeError(
                 f'Patch for review {review.id} failed: {exc.output}'
             )
-        logger.info(f'***** Done applying review {review._number} to project {review.project}')
+        logger.info(f'***** Done applying review {review._number} to project {review.project}\n')
 
 
     def patch_repo_sync(self, review_ids, id_type):
@@ -427,7 +427,9 @@ def main():
     os.environ.pop("LD_LIBRARY_PATH", None)
 
     version_string = f"patch_via_gerrit version {__version__} (build {__build__})"
-
+    default_config_file = os.path.join(
+        os.path.expanduser('~'), '.ssh', 'patch_via_gerrit.ini'
+    )
     parser = argparse.ArgumentParser(
         description='Patch repo sync with requested Gerrit reviews'
     )
@@ -435,7 +437,7 @@ def main():
                         help='Enable debugging output')
     parser.add_argument('-c', '--config', dest='gerrit_config',
                         help='Configuration file for patching via Gerrit',
-                        default='patch_via_gerrit.ini')
+                        default=default_config_file)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-r', '--review-id', dest='review_ids', nargs='+',
                        action=ParseCSVs, help='review IDs to apply (comma-separated)')
@@ -443,8 +445,9 @@ def main():
                        action=ParseCSVs, help='change IDs to apply (comma-separated)')
     group.add_argument('-t', '--topic', dest='topics', nargs='+',
                        action=ParseCSVs, help='topics to apply (comma-separated)')
-    parser.add_argument('-s', '--source', dest='repo_source', required=True,
-                        help='Location of the repo sync checkout')
+    parser.add_argument('-s', '--source', dest='repo_source',
+                        help='Location of the repo sync checkout',
+                        default='.')
     parser.add_argument('-C', '--checkout', action='store_true',
                         help='When specified, patch_via_gerrit will checkout '
                         'relevant changes rather than cherry pick')
@@ -464,12 +467,16 @@ def main():
         sys.exit(1)
     os.chdir(args.repo_source)
 
+    if not os.path.exists(args.gerrit_config):
+        logger.error(f'Configuration file {args.gerrit_config} missing!')
+        sys.exit(1)
+
     gerrit_config = configparser.ConfigParser()
     gerrit_config.read(args.gerrit_config)
 
     if 'main' not in gerrit_config.sections():
         logger.error(
-            f'Invalid or unable to read config file "{args.gerrit_config}"'
+            f'Invalid config file "{args.gerrit_config}" (missing "main" section)'
         )
         sys.exit(1)
 
