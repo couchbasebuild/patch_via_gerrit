@@ -57,6 +57,13 @@ def cd(path):
     finally:
         os.chdir(cwd)
 
+def default_ini_file():
+    """
+    Returns a string path to the default patch_via_gerrit.ini
+    """
+    return os.path.join(
+        os.path.expanduser('~'), '.ssh', 'patch_via_gerrit.ini'
+    )
 
 class ParseCSVs(argparse.Action):
     """Parse comma separated lists"""
@@ -136,6 +143,39 @@ class GerritPatches:
         # We track what's been applied to ensure at least the changes we
         # specifically requested got done
         self.applied_reviews = []
+        # Manifest project name (could theoretically be dynamic)
+        self.manifest_project = 'manifest'
+
+    @classmethod
+    def from_config_file(cls, config_path, checkout=False):
+        """
+        Factory method: construct a GerritPatches from the path to a config file
+        """
+        if not os.path.exists(config_path):
+            logger.error(f'Configuration file {config_path} missing!')
+            sys.exit(1)
+
+        gerrit_config = configparser.ConfigParser()
+        gerrit_config.read(config_path)
+
+        if 'main' not in gerrit_config.sections():
+            logger.error(
+                f'Invalid config file "{config_path}" (missing "main" section)'
+            )
+            sys.exit(1)
+
+        try:
+            gerrit_url = gerrit_config.get('main', 'gerrit_url')
+            user = gerrit_config.get('main', 'username')
+            passwd = gerrit_config.get('main', 'password')
+        except configparser.NoOptionError:
+            logger.error(
+                'One of the options is missing from the config file: '
+                'gerrit_url, username, password.  Aborting...'
+            )
+            sys.exit(1)
+
+        return cls(gerrit_url, user, passwd, checkout)
 
     def query(self, query_string, options=None, quiet=False):
         """
@@ -160,7 +200,12 @@ class GerritPatches:
         else:
             for result in results:
                 num_id = str(result['_number'])
-                data[num_id] = GerritChange(result, self.patch_command)
+                # Always cherry-pick for manifest project
+                if result['project'] == self.manifest_project:
+                    patch_command = "Cherry Pick"
+                else:
+                    patch_command = self.patch_command
+                data[num_id] = GerritChange(result, patch_command)
         if not quiet:
             logger.debug(f'  Review IDs from query: {", ".join(list(data))}')
 
@@ -373,13 +418,13 @@ class GerritPatches:
         # Compute full set of reviews
         reviews = self.get_reviews(review_ids, id_type)
 
-        # Pull out any changes for the 'manifest' project and apply them
+        # Pull out any changes for the manifest project and apply them
         # first, to the local repo manifest. If there are any such changes,
         # re-run repo sync afterwards.
         manifest_changes_found = False
         for review_id in sorted(reviews.keys()):
             review = reviews[review_id]
-            if review.project == "manifest":
+            if review.project == self.manifest_project:
                 manifest_changes_found = True
                 del reviews[review_id]
                 self.apply_single_review(
@@ -427,9 +472,7 @@ def main():
     os.environ.pop("LD_LIBRARY_PATH", None)
 
     version_string = f"patch_via_gerrit version {__version__} (build {__build__})"
-    default_config_file = os.path.join(
-        os.path.expanduser('~'), '.ssh', 'patch_via_gerrit.ini'
-    )
+    default_config_file = default_ini_file()
     parser = argparse.ArgumentParser(
         description='Patch repo sync with requested Gerrit reviews'
     )
@@ -467,33 +510,12 @@ def main():
         sys.exit(1)
     os.chdir(args.repo_source)
 
-    if not os.path.exists(args.gerrit_config):
-        logger.error(f'Configuration file {args.gerrit_config} missing!')
-        sys.exit(1)
-
-    gerrit_config = configparser.ConfigParser()
-    gerrit_config.read(args.gerrit_config)
-
-    if 'main' not in gerrit_config.sections():
-        logger.error(
-            f'Invalid config file "{args.gerrit_config}" (missing "main" section)'
-        )
-        sys.exit(1)
-
-    try:
-        gerrit_url = gerrit_config.get('main', 'gerrit_url')
-        user = gerrit_config.get('main', 'username')
-        passwd = gerrit_config.get('main', 'password')
-    except configparser.NoOptionError:
-        logger.error(
-            'One of the options is missing from the config file: '
-            'gerrit_url, username, password.  Aborting...'
-        )
-        sys.exit(1)
-
     # Initialize class to allow connection to Gerrit URL, determine
     # type of starting parameters and then find all related reviews
-    gerrit_patches = GerritPatches(gerrit_url, user, passwd, args.checkout)
+    gerrit_patches = GerritPatches.from_config_file(
+        args.gerrit_config,
+        args.checkout
+    )
 
     if args.review_ids:
         id_type = 'review'

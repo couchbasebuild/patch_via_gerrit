@@ -1,32 +1,40 @@
 import os
 import shutil
+import sys
 import pytest
 import patch_via_gerrit.scripts.main as app
 import patch_via_gerrit.tests.conftest as conftest
 
-def test_check_env_vars():
-    gerrit_url = os.getenv('gerrit_url')
-    gerrit_user = os.getenv('gerrit_user')
-    gerrit_pass = os.getenv('gerrit_pass')
-    if None in [gerrit_url, gerrit_user, gerrit_pass]:
-        pytest.exit("Missing environment variable/s")
 
 def test_cd():
     with app.cd("/usr/bin"):
         assert os.getcwd() == "/usr/bin"
 
 class TestGerritPatches:
-    gerrit_patches = app.GerritPatches(
-        os.getenv('gerrit_url'),
-        os.getenv('gerrit_user'),
-        os.getenv('gerrit_pass')
-    )
+    gerrit_patches = None
 
     def reset(self):
         self.gerrit_patches.applied_reviews = []
         self.gerrit_patches.requested_reviews = []
         conftest.reset_checkout()
         os.chdir(conftest.source_path)
+
+    @pytest.fixture(autouse=True)
+    def load_creds(self):
+        # Use the standard config file if available, or env vars if not
+        ini_file = app.default_ini_file()
+        if os.path.exists(ini_file):
+            self.gerrit_patches = app.GerritPatches.from_config_file(ini_file)
+        else:
+            gerrit_url = os.getenv('gerrit_url')
+            gerrit_user = os.getenv('gerrit_user')
+            gerrit_pass = os.getenv('gerrit_pass')
+            if None in [gerrit_url, gerrit_user, gerrit_pass]:
+                print("Missing environment variable/s")
+                sys.exit(1)
+            self.gerrit_patches = app.GerritPatches(
+                gerrit_url, gerrit_user, gerrit_pass
+            )
 
     def test_rest_get(self):
         # getting via rest API

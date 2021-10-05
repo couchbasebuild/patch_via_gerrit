@@ -18,7 +18,14 @@ pip3 install -r requirements.txt
 pip3 install pytest pytest-cov
 ```
 
-Run the tests,
+Run the tests:
+
+```shell
+PYTHONPATH=. pytest --cov=patch_via_gerrit -s -v
+```
+
+Note: the above assumes you have a `${HOME}/.ssh/patch_via_gerrit.ini` file with appropriate credentials.
+If you don't, you can instead pass the credentials on the command-line like so:
 
 ```shell
 PYTHONPATH=. gerrit_url=http://example.com gerrit_user=user gerrit_pass=pass pytest --cov=patch_via_gerrit -s -v
