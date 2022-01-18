@@ -241,7 +241,7 @@ class GerritPatches:
         """Find all reviews for a given topic"""
 
         logger.debug(f'Querying on topic {topic}')
-        return self.query(f'/changes/?q=status:open+topic:{topic}')
+        return self.query(f'/changes/?q=status:open+topic:"{topic}"')
 
     def get_open_parents(self, review):
         """Find all open parent reviews for a given review"""

@@ -167,3 +167,11 @@ class TestGerritPatches:
         self.reset()
         self.gerrit_patches.patch_repo_sync(['162331'], 'review')
         assert os.path.exists(f'{conftest.source_path}/mossScope/test/change5')
+
+    def test_get_topic_with_colon(self):
+        # CBD-4568: get_changes_via_topic_id formerly used the raw topic name
+        # when querying gerrit, the results showed 500 results (the pagination
+        # limit) rather than the expected zero.
+        self.reset()
+        reviews = list(self.gerrit_patches.get_reviews(['MB-48692:'], 'topic'))
+        assert len(reviews) == 0
