@@ -2,15 +2,10 @@ import os
 from subprocess import Popen, PIPE
 from tempfile import TemporaryDirectory
 
-_temp_dir = None
-source_path = ""
+_temp_dir = TemporaryDirectory()
+source_path = _temp_dir.name
 
 def reset_checkout():
-    global _temp_dir, source_path
-    if _temp_dir is None:
-        _temp_dir = TemporaryDirectory()
-        source_path = _temp_dir.name
-
     process = Popen([
         'repo', 'init',
         '-u', 'git://github.com/couchbase/manifest',
@@ -28,3 +23,4 @@ def reset_checkout():
         'repo', 'sync', '-j4'
     ], stdout=PIPE, stderr=PIPE, cwd=source_path)
     stdout, stderr = process.communicate()
+    os.chdir(source_path)

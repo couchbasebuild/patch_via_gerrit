@@ -12,7 +12,6 @@ import argparse
 import configparser
 import contextlib
 import logging
-import json
 import os
 import os.path
 import re
@@ -34,6 +33,8 @@ handler = logging.StreamHandler()
 handler.setFormatter(formatter)
 handler.setLevel(logging.INFO)
 logger.addHandler(handler)
+
+default_whitelist = ["unstable"]
 
 class InvalidUpstreamException(Exception):
     def __init__(self, project):
@@ -127,7 +128,7 @@ class GerritPatches:
     be applied to the repo sync
     """
 
-    def __init__(self, gerrit_url, user, passwd, checkout=False):
+    def __init__(self, gerrit_url, user, passwd, checkout=False, whitelist_branches=[]):
         """Initial Gerrit connection and set base options"""
 
         auth = HTTPBasicAuth(user, passwd)
@@ -144,10 +145,19 @@ class GerritPatches:
         # specifically requested got done
         self.applied_reviews = []
         # Manifest project name (could theoretically be dynamic)
+        self.manifest = None
+        # The manifest is only read from disk if manifest_stale is true. This
+        # is to facilitate a re-read in the event a patch is applied to the
+        # manifest itself
+        self.manifest_stale = True
         self.manifest_project = 'manifest'
+        # We use this regex to determine if the revision is a sha, for a
+        # given project in the manifest
+        self.sha_re = re.compile(r'[0-9a-f]{40}')
+        self.whitelist_branches = whitelist_branches
 
     @classmethod
-    def from_config_file(cls, config_path, checkout=False):
+    def from_config_file(cls, config_path, checkout=False, whitelist_branches=[]):
         """
         Factory method: construct a GerritPatches from the path to a config file
         """
@@ -175,7 +185,30 @@ class GerritPatches:
             )
             sys.exit(1)
 
-        return cls(gerrit_url, user, passwd, checkout)
+        return cls(gerrit_url, user, passwd, checkout, whitelist_branches)
+
+    def get_project_path_and_branch_from_manifest(self, project):
+        branch = None
+        path = None
+        if self.manifest_stale:
+            # Read in the manifest. We ask repo to report the manifest, because
+            # that automatically filters out projects that were not synced due
+            # to groups ("repo init -g ....", or being in "notdefault" group).
+            manifest_str = subprocess.check_output(['repo', 'manifest'])
+            self.manifest = EleTree.fromstring(manifest_str)
+            self.manifest_stale = False
+
+        proj_info = self.manifest.find(
+                f'.//project[@name="{project}"]'
+        )
+        if proj_info != None:
+            path = proj_info.attrib.get('path', project)
+            branch = proj_info.attrib.get('revision')
+            if branch == None:
+                default = self.manifest.find(".//default")
+                if default != None:
+                    branch = default.attrib.get('revision')
+        return (path, branch)
 
     def query(self, query_string, options=None, quiet=False):
         """
@@ -312,15 +345,6 @@ class GerritPatches:
                 if new_id in all_reviews.keys():
                     continue
 
-                # Stop processing a review if one has already been added
-                # for the same project and change_id (e.g. if the
-                # incoming review is on a different branch to one we've
-                # already applied)
-                if [k for k, v in all_reviews.items()
-                    if v.project == review.project
-                        and v.change_id == review.change_id]:
-                    break
-
                 all_reviews[new_id] = review
 
                 change_reviews = self.get_changes_via_change_id(
@@ -360,6 +384,22 @@ class GerritPatches:
                             f'Remove {p_id}.  Checkout of its child review {r_id} '
                             'already include the change.')
 
+        for id, review in all_reviews.copy().items():
+            (_, manifest_branch) = self.get_project_path_and_branch_from_manifest(review.project)
+            if (manifest_branch
+                and id not in self.requested_reviews
+                and review.branch not in self.whitelist_branches
+                and review.branch != manifest_branch
+                and not self.sha_re.match(manifest_branch)):
+                # Note: in this conditional we REJECT changes which match all
+                # four of these criteria:
+                # - review ID was not explicitly requested
+                # - review branch does not appear in whitelist_branches
+                # - review branch does not match manifest revision
+                # - manifest revision does not point at a sha
+                logger.info(f"  Ignoring {review._number} because it's for {review.branch}, manifest branch is {manifest_branch}")
+                del all_reviews[id]
+
         logger.info('Final list of review IDs to apply: {}'.format(
             ', '.join([str(r_id) for r_id in all_reviews.keys()])
         ))
@@ -376,7 +416,7 @@ class GerritPatches:
                 f'Applied: {self.applied_reviews}'
             )
             sys.exit(1)
-        else:
+        elif self.requested_reviews:
             logger.info(
                 f"All explicitly-requested review IDs applied! {self.requested_reviews}"
             )
@@ -431,24 +471,17 @@ class GerritPatches:
                     review,
                     os.path.join(".repo", "manifests")
                 )
+                self.manifest_stale = True
 
         # If there were manifest changes, re-run "repo sync"
         if manifest_changes_found:
             subprocess.check_call(['repo', 'sync', '--jobs=4'])
 
-        # Read in the manifest. We ask repo to report the manifest, because
-        # that automatically filters out projects that were not synced due
-        # to groups ("repo init -g ....", or being in "notdefault" group).
-        manixml = subprocess.check_output(['repo', 'manifest'])
-        mf = EleTree.fromstring(manixml)
-
-        # Iterate over all discovered reviews, applying the changes
         for review_id in sorted(reviews.keys()):
             review = reviews[review_id]
-            proj_info = mf.find(
-                f'.//project[@name="{review.project}"]'
-            )
-            if proj_info is None:
+            (path, branch) = self.get_project_path_and_branch_from_manifest(review.project)
+
+            if (path, branch) == (None, None):
                 logger.info(
                     f"***** NOTE: ignoring review ID {review_id} for project "
                     f"{review.project} that is either not part of the "
@@ -456,7 +489,6 @@ class GerritPatches:
                 )
                 continue
 
-            path = proj_info.attrib.get('path', review.project)
             self.apply_single_review(review, path)
         self.check_requested_reviews_applied()
 
@@ -488,6 +520,12 @@ def main():
                        action=ParseCSVs, help='change IDs to apply (comma-separated)')
     group.add_argument('-t', '--topic', dest='topics', nargs='+',
                        action=ParseCSVs, help='topics to apply (comma-separated)')
+    parser.add_argument('-w', '--whitelist-branches', nargs='+',
+                        dest='whitelist_branches',
+                        action=ParseCSVs,
+                        help='Branches to which changes can be applied even if '
+                        'they don\'t match the revision in the manifest',
+                        default=default_whitelist)
     parser.add_argument('-s', '--source', dest='repo_source',
                         help='Location of the repo sync checkout',
                         default='.')
@@ -514,7 +552,8 @@ def main():
     # type of starting parameters and then find all related reviews
     gerrit_patches = GerritPatches.from_config_file(
         args.gerrit_config,
-        args.checkout
+        args.checkout,
+        args.whitelist_branches
     )
 
     if args.review_ids:
