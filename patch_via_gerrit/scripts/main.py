@@ -377,7 +377,7 @@ class GerritPatches:
         # Checkout of a child will apply all its parents
         if self.patch_command == "Checkout":
             for r_id in sorted (all_reviews):
-                for p_id in self.get_open_parents(all_reviews[r_id]):
+                for p_id in self.get_open_parents(all_reviews.get(r_id)):
                     if p_id in all_reviews:
                         del all_reviews[p_id]
                         logger.info(
