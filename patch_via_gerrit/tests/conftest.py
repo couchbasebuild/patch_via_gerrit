@@ -8,7 +8,7 @@ source_path = _temp_dir.name
 def reset_checkout():
     process = Popen([
         'repo', 'init',
-        '-u', 'git://github.com/couchbase/manifest',
+        '-u', 'https://github.com/couchbase/manifest',
         '-m', 'python_tools/patch_via_gerrit/testsuite.xml'
     ], stdout=PIPE, stderr=PIPE, cwd=source_path)
     stdout, stderr = process.communicate()
