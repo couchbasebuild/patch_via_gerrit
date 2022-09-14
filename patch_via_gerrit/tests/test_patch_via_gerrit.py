@@ -197,3 +197,11 @@ class TestGerritPatches:
         self.gerrit_patches.whitelist_branches = ["unstable"]
         self.gerrit_patches.patch_repo_sync(['I4b81275fedaf362d5f358772edc0b688a3ef2015'], 'change')
         assert self.gerrit_patches.applied_reviews == ["170558"]
+
+    def test_multimatch(self):
+        # A change whose review ID fuzzy matches a patch set from another chg
+        # note: this test will break if abandoned change 156559 is ever deleted
+        self.reset()
+        self.gerrit_patches.requested_reviews = ['179148']
+        changes = self.gerrit_patches.get_changes_via_review_id('179148')
+        assert list(changes.keys()) == ["179148"]

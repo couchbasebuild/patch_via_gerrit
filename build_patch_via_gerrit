@@ -10,19 +10,10 @@ mkdir -p "${BUILDDIR}"
 python3 -m venv "${BUILDDIR}/venv"
 . "${BUILDDIR}/venv/bin/activate"
 
-# for now we have a modified version of pyinstaller, so we have to build
-# the bootloader and then pip it from there. Except on MacOS x86_64,
-# where this will build but then attempt to notarize and fail, so we
-# use an old version.
 if [[ "${ARCH}" == "x86_64" && "${PLATFORM}" == "darwin" ]]; then
     pip3 install pyinstaller==4.2
 else
-    pushd ${SCRIPTPATH}/../pyinstaller/bootloader
-    python waf all
-    git status
-    cd ..
-    pip3 install wheel && pip install .
-    popd
+    pip3 install PyInstaller==4.10
 fi
 
 # Customize _buildversion.py if build info available in environment
