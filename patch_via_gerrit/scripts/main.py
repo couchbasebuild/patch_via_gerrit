@@ -42,6 +42,7 @@ class InvalidUpstreamException(Exception):
         self.message = f'Project {project} has an invalid upstream in manifest - is it locked to a sha?'
         super().__init__(self.message)
 
+
 @contextlib.contextmanager
 def cd(path):
     """Simple context manager to handle temporary directory change"""
@@ -58,6 +59,7 @@ def cd(path):
     finally:
         os.chdir(cwd)
 
+
 def default_ini_file():
     """
     Returns a string path to the default patch_via_gerrit.ini
@@ -65,6 +67,7 @@ def default_ini_file():
     return os.path.join(
         os.path.expanduser('~'), '.ssh', 'patch_via_gerrit.ini'
     )
+
 
 class ParseCSVs(argparse.Action):
     """Parse comma separated lists"""
@@ -141,9 +144,10 @@ class GerritPatches:
         # are applied regardless of their status. Derived reviews are only
         # applied if they are still open
         self.requested_reviews = []
-        # We track what's been applied to ensure at least the changes we
-        # specifically requested got done
+        # We track what's been applied or ignored to ensure at least the
+        # changes we specifically requested got done or were explicitly skipped
         self.applied_reviews = []
+        self.ignored_reviews = []
         # Manifest project name (could theoretically be dynamic)
         self.manifest = None
         # The manifest is only read from disk if manifest_stale is true. This
@@ -151,10 +155,13 @@ class GerritPatches:
         # manifest itself
         self.manifest_stale = True
         self.manifest_project = 'manifest'
+        self.ignore_manifest = False
+        self.only_manifest = False
         # We use this regex to determine if the revision is a sha, for a
         # given project in the manifest
         self.sha_re = re.compile(r'[0-9a-f]{40}')
         self.whitelist_branches = whitelist_branches
+
 
     @classmethod
     def from_config_file(cls, config_path, checkout=False, whitelist_branches=[]):
@@ -187,6 +194,15 @@ class GerritPatches:
 
         return cls(gerrit_url, user, passwd, checkout, whitelist_branches)
 
+
+    def set_only_manifest(self, only_manifest):
+        self.only_manifest = only_manifest
+
+
+    def set_ignore_manifest(self, ignore_manifest):
+        self.ignore_manifest = ignore_manifest
+
+
     def get_project_path_and_branch_from_manifest(self, project):
         branch = None
         path = None
@@ -209,6 +225,7 @@ class GerritPatches:
                 if default != None:
                     branch = default.attrib.get('revision')
         return (path, branch)
+
 
     def query(self, query_string, options=None, quiet=False):
         """
@@ -244,6 +261,7 @@ class GerritPatches:
 
         return data
 
+
     def get_changes_via_review_id(self, review_id):
         """Find all reviews for a given review ID"""
 
@@ -264,17 +282,20 @@ class GerritPatches:
         status = "status:open+" if review_id not in self.requested_reviews else ""
         return self.query(f'/changes/?q={status}change:{review_id}')
 
+
     def get_changes_via_change_id(self, change_id):
         """Find all reviews for a given change ID"""
 
         logger.debug(f'Querying on change ID {change_id}')
         return self.query(f'/changes/?q=status:open+change:{change_id}')
 
+
     def get_changes_via_topic_id(self, topic):
         """Find all reviews for a given topic"""
 
         logger.debug(f'Querying on topic {topic}')
         return self.query(f'/changes/?q=status:open+topic:"{topic}"')
+
 
     def get_open_parents(self, review):
         """Find all open parent reviews for a given review"""
@@ -300,6 +321,7 @@ class GerritPatches:
         )
 
         return reviews
+
 
     def get_reviews(self, initial_args, id_type):
         """
@@ -406,26 +428,36 @@ class GerritPatches:
 
         return all_reviews
 
+
     def check_requested_reviews_applied(self):
         # If one or more of our requested reviews doesn't appear in applied reviews,
         # something the user asked for didn't happen. Error out with some info.
-        if any(item not in self.applied_reviews for item in self.requested_reviews):
+        if any(
+            item not in self.applied_reviews + self.ignored_reviews
+            for item in self.requested_reviews
+        ):
             logger.critical(
-                "Failed to apply all explicitly-requested review IDs! "
+                f"Failed to apply or ignore all explicitly-requested review IDs! "
                 f'Requested: {self.requested_reviews} '
-                f'Applied: {self.applied_reviews}'
+                f'Applied: {self.applied_reviews} '
+                f'Ignored: {self.ignored_reviews}'
             )
             sys.exit(1)
         elif self.requested_reviews:
             logger.info(
-                f"All explicitly-requested review IDs applied! {self.requested_reviews}"
+                f"All explicitly-requested review IDs applied or ignored! "
+                f'Requested: {self.requested_reviews} '
+                f'Applied: {self.applied_reviews} '
+                f'Ignored: {self.ignored_reviews}'
             )
 
-    def apply_single_review(self, review, proj_path):
+
+    def apply_single_review(self, review, proj_path, ignore=False):
         """
         Given a single review object from Gerrit and a path, apply
         the git change to that path (using either checkout or cherry-pick
-        as requested).
+        as requested). If "ignore" is True, don't really apply it, but
+        still error-check it and note that we intentionally skipped it.
         """
 
         if not os.path.exists(proj_path):
@@ -437,16 +469,83 @@ class GerritPatches:
             )
             sys.exit(5)
 
+        if ignore:
+            logger.info(
+                f'***** Ignoring "{review.project}" review {review._number} '
+                f'as requested')
+            self.ignored_reviews.append(review._number)
+            return
+
+        logger.info(
+            f'***** Applying https://review.couchbase.org/'
+            f'{review._number} to project {review.project}:'
+        )
         try:
-            logger.info(f'***** Applying http://review.couchbase.org/{review._number} to project {review.project}:')
             with cd(proj_path):
                 subprocess.check_call(review.patch_command, shell=True)
-                self.applied_reviews.append(review._number)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f'Patch for review {review.id} failed: {exc.output}'
             )
-        logger.info(f'***** Done applying review {review._number} to project {review.project}\n')
+        logger.info(
+            f'***** Done applying review {review._number} '
+            f'to project {review.project}\n'
+        )
+        self.applied_reviews.append(review._number)
+
+
+    def apply_manifest_reviews(self, reviews):
+        """
+        Digs out and applies all changes to the 'manifest' project.
+        Re-runs "repo sync" if any such changes found.
+        """
+
+        logger.info("Looking for reviews on the 'manifest' project...")
+        manifest_changes_found = False
+        for review_id in sorted(reviews.keys()):
+            review = reviews[review_id]
+            if review.project == self.manifest_project:
+                del reviews[review_id]
+                manifest_changes_found = True
+                self.apply_single_review(
+                    review,
+                    os.path.join(".repo", "manifests"),
+                    self.ignore_manifest
+                )
+
+        # If there were manifest changes, re-run "repo sync"
+        if manifest_changes_found and not self.ignore_manifest:
+            self.manifest_stale = True
+            subprocess.check_call(['repo', 'sync', '--jobs=4'])
+
+
+    def apply_non_manifest_reviews(self, reviews):
+        """
+        Applies all changes NOT to the 'manifest' project.
+        """
+
+        logger.info("Looking for reviews to non-manifest projects...")
+        for review_id in sorted(reviews.keys()):
+            review = reviews[review_id]
+            if review.project == self.manifest_project:
+                logger.fatal(
+                    f"Found review {review_id} for 'manifest' project - "
+                    "should not happen at this stage!"
+                )
+                sys.exit(5)
+
+            (path, branch) = \
+                self.get_project_path_and_branch_from_manifest(review.project)
+
+            if (path, branch) == (None, None):
+                logger.info(
+                    f"***** NOTE: ignoring review ID {review_id} for project "
+                    f"{review.project} that is either not part of the "
+                    f"manifest, or was excluded due to manifest group filters."
+                )
+                continue
+
+            self.apply_single_review(review, path, self.only_manifest)
 
 
     def patch_repo_sync(self, review_ids, id_type):
@@ -458,39 +557,12 @@ class GerritPatches:
         # Compute full set of reviews
         reviews = self.get_reviews(review_ids, id_type)
 
-        # Pull out any changes for the manifest project and apply them
-        # first, to the local repo manifest. If there are any such changes,
-        # re-run repo sync afterwards.
-        manifest_changes_found = False
-        for review_id in sorted(reviews.keys()):
-            review = reviews[review_id]
-            if review.project == self.manifest_project:
-                manifest_changes_found = True
-                del reviews[review_id]
-                self.apply_single_review(
-                    review,
-                    os.path.join(".repo", "manifests")
-                )
-                self.manifest_stale = True
+        # Apply them all - manifest reviews first
+        self.apply_manifest_reviews(reviews)
+        self.apply_non_manifest_reviews(reviews)
 
-        # If there were manifest changes, re-run "repo sync"
-        if manifest_changes_found:
-            subprocess.check_call(['repo', 'sync', '--jobs=4'])
-
-        for review_id in sorted(reviews.keys()):
-            review = reviews[review_id]
-            (path, branch) = self.get_project_path_and_branch_from_manifest(review.project)
-
-            if (path, branch) == (None, None):
-                logger.info(
-                    f"***** NOTE: ignoring review ID {review_id} for project "
-                    f"{review.project} that is either not part of the "
-                    "manifest, or was excluded due to manifest group filters."
-                )
-                continue
-
-            self.apply_single_review(review, path)
         self.check_requested_reviews_applied()
+
 
 def main():
     """
@@ -513,12 +585,12 @@ def main():
     parser.add_argument('-c', '--config', dest='gerrit_config',
                         help='Configuration file for patching via Gerrit',
                         default=default_config_file)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-r', '--review-id', dest='review_ids', nargs='+',
+    change_group = parser.add_mutually_exclusive_group(required=True)
+    change_group.add_argument('-r', '--review-id', dest='review_ids', nargs='+',
                        action=ParseCSVs, help='review IDs to apply (comma-separated)')
-    group.add_argument('-g', '--change-id', dest='change_ids', nargs='+',
+    change_group.add_argument('-g', '--change-id', dest='change_ids', nargs='+',
                        action=ParseCSVs, help='change IDs to apply (comma-separated)')
-    group.add_argument('-t', '--topic', dest='topics', nargs='+',
+    change_group.add_argument('-t', '--topic', dest='topics', nargs='+',
                        action=ParseCSVs, help='topics to apply (comma-separated)')
     parser.add_argument('-w', '--whitelist-branches', nargs='+',
                         dest='whitelist_branches',
@@ -526,6 +598,11 @@ def main():
                         help='Branches to which changes can be applied even if '
                         'they don\'t match the revision in the manifest',
                         default=default_whitelist)
+    manifest_group = parser.add_mutually_exclusive_group(required=False)
+    manifest_group.add_argument('--ignore-manifest', action='store_true',
+                                help='Do not apply any changes to "manifest" repo')
+    manifest_group.add_argument('--only-manifest', action='store_true',
+                                help='Apply only changes to "manifest" repo')
     parser.add_argument('-s', '--source', dest='repo_source',
                         help='Location of the repo sync checkout',
                         default='.')
@@ -555,6 +632,10 @@ def main():
         args.checkout,
         args.whitelist_branches
     )
+    if args.only_manifest:
+        gerrit_patches.set_only_manifest(True)
+    elif args.ignore_manifest:
+        gerrit_patches.set_ignore_manifest(True)
 
     if args.review_ids:
         id_type = 'review'

@@ -16,6 +16,8 @@ class TestGerritPatches:
     def reset(self):
         self.gerrit_patches.applied_reviews = []
         self.gerrit_patches.requested_reviews = []
+        self.gerrit_patches.set_ignore_manifest(False)
+        self.gerrit_patches.set_only_manifest(False)
         conftest.reset_checkout()
 
     @pytest.fixture(autouse=True)
@@ -205,3 +207,17 @@ class TestGerritPatches:
         self.gerrit_patches.requested_reviews = ['179148']
         changes = self.gerrit_patches.get_changes_via_review_id('179148')
         assert list(changes.keys()) == ["179148"]
+
+    def test_ignore_manifest(self):
+        # A change to the manifest repository, but we request ignoring manifest changes
+        self.reset()
+        self.gerrit_patches.set_ignore_manifest(True)
+        self.gerrit_patches.patch_repo_sync(['183522'], 'review')
+        assert self.gerrit_patches.ignored_reviews == ['183522']
+
+    def test_only_manifest(self):
+        # A change to a non-manifest repository, but we request only manifest changes
+        self.reset
+        self.gerrit_patches.set_only_manifest(True)
+        self.gerrit_patches.patch_repo_sync(['134808'], 'review')
+        assert self.gerrit_patches.ignored_reviews == ['134808']
