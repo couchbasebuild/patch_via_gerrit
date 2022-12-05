@@ -144,10 +144,9 @@ class GerritPatches:
         # are applied regardless of their status. Derived reviews are only
         # applied if they are still open
         self.requested_reviews = []
-        # We track what's been applied or ignored to ensure at least the
-        # changes we specifically requested got done or were explicitly skipped
+        # We track what's been applied to ensure at least the changes we
+        # specifically requested got done
         self.applied_reviews = []
-        self.ignored_reviews = []
         # Manifest project name (could theoretically be dynamic)
         self.manifest = None
         # The manifest is only read from disk if manifest_stale is true. This
@@ -433,31 +432,28 @@ class GerritPatches:
         # If one or more of our requested reviews doesn't appear in applied reviews,
         # something the user asked for didn't happen. Error out with some info.
         if any(
-            item not in self.applied_reviews + self.ignored_reviews
+            item not in self.applied_reviews
             for item in self.requested_reviews
         ):
             logger.critical(
-                f"Failed to apply or ignore all explicitly-requested review IDs! "
+                f"Failed to apply all explicitly-requested review IDs! "
                 f'Requested: {self.requested_reviews} '
-                f'Applied: {self.applied_reviews} '
-                f'Ignored: {self.ignored_reviews}'
+                f'Applied: {self.applied_reviews}'
             )
             sys.exit(1)
         elif self.requested_reviews:
             logger.info(
-                f"All explicitly-requested review IDs applied or ignored! "
+                f"All explicitly-requested review IDs applied! "
                 f'Requested: {self.requested_reviews} '
-                f'Applied: {self.applied_reviews} '
-                f'Ignored: {self.ignored_reviews}'
+                f'Applied: {self.applied_reviews}'
             )
 
 
-    def apply_single_review(self, review, proj_path, ignore=False):
+    def apply_single_review(self, review, proj_path):
         """
         Given a single review object from Gerrit and a path, apply
         the git change to that path (using either checkout or cherry-pick
-        as requested). If "ignore" is True, don't really apply it, but
-        still error-check it and note that we intentionally skipped it.
+        as requested).
         """
 
         if not os.path.exists(proj_path):
@@ -468,13 +464,6 @@ class GerritPatches:
                 f'Expected to be in {proj_path}'
             )
             sys.exit(5)
-
-        if ignore:
-            logger.info(
-                f'***** Ignoring "{review.project}" review {review._number} '
-                f'as requested')
-            self.ignored_reviews.append(review._number)
-            return
 
         logger.info(
             f'***** Applying https://review.couchbase.org/'
@@ -509,12 +498,11 @@ class GerritPatches:
                 manifest_changes_found = True
                 self.apply_single_review(
                     review,
-                    os.path.join(".repo", "manifests"),
-                    self.ignore_manifest
+                    os.path.join(".repo", "manifests")
                 )
 
         # If there were manifest changes, re-run "repo sync"
-        if manifest_changes_found and not self.ignore_manifest:
+        if manifest_changes_found:
             self.manifest_stale = True
             subprocess.check_call(['repo', 'sync', '--jobs=4'])
 
@@ -528,6 +516,11 @@ class GerritPatches:
         for review_id in sorted(reviews.keys()):
             review = reviews[review_id]
             if review.project == self.manifest_project:
+                if self.ignore_manifest:
+                    logger.debug(
+                        f"Ignoring review {review_id} for 'manifest' project"
+                    )
+                    continue
                 logger.fatal(
                     f"Found review {review_id} for 'manifest' project - "
                     "should not happen at this stage!"
@@ -545,7 +538,7 @@ class GerritPatches:
                 )
                 continue
 
-            self.apply_single_review(review, path, self.only_manifest)
+            self.apply_single_review(review, path)
 
 
     def patch_repo_sync(self, review_ids, id_type):
@@ -558,10 +551,14 @@ class GerritPatches:
         reviews = self.get_reviews(review_ids, id_type)
 
         # Apply them all - manifest reviews first
-        self.apply_manifest_reviews(reviews)
-        self.apply_non_manifest_reviews(reviews)
+        if not self.ignore_manifest:
+            self.apply_manifest_reviews(reviews)
+        if not self.only_manifest:
+            self.apply_non_manifest_reviews(reviews)
 
-        self.check_requested_reviews_applied()
+        # Only do this check when doing a full apply
+        if not self.only_manifest and not self.ignore_manifest:
+            self.check_requested_reviews_applied()
 
 
 def main():
