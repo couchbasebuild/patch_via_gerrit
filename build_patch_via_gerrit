@@ -10,11 +10,7 @@ mkdir -p "${BUILDDIR}"
 python3 -m venv "${BUILDDIR}/venv"
 . "${BUILDDIR}/venv/bin/activate"
 
-if [[ "${ARCH}" == "x86_64" && "${PLATFORM}" == "darwin" ]]; then
-    pip3 install pyinstaller==4.2
-else
-    pip3 install PyInstaller==4.10
-fi
+pip3 install pyinstaller==5.7.0
 
 # Customize _buildversion.py if build info available in environment
 if [ ! -z "${VERSION}" -a ! -z "${BLD_NUM}" ]; then
