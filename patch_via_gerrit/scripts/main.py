@@ -21,6 +21,7 @@ import xml.etree.ElementTree as EleTree
 
 import requests.exceptions
 
+from shutil import which
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth
 from patch_via_gerrit.scripts._version import __version__, __build__
 
@@ -209,7 +210,7 @@ class GerritPatches:
             # Read in the manifest. We ask repo to report the manifest, because
             # that automatically filters out projects that were not synced due
             # to groups ("repo init -g ....", or being in "notdefault" group).
-            manifest_str = subprocess.check_output(['repo', 'manifest'])
+            manifest_str = subprocess.check_output([which("repo"), "manifest"])
             self.manifest = EleTree.fromstring(manifest_str)
             self.manifest_stale = False
 
@@ -504,7 +505,7 @@ class GerritPatches:
         # If there were manifest changes, re-run "repo sync"
         if manifest_changes_found:
             self.manifest_stale = True
-            subprocess.check_call(['repo', 'sync', '--jobs=4'])
+            subprocess.check_call([which("repo"), "sync", "--jobs=4"])
 
 
     def apply_non_manifest_reviews(self, reviews):

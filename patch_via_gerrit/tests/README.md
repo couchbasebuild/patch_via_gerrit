@@ -21,7 +21,7 @@ pip3 install pytest pytest-cov
 Run the tests:
 
 ```shell
-PYTHONPATH=. pytest --cov=patch_via_gerrit -s -v
+PYTHONPATH=. python -m pytest --cov=patch_via_gerrit -s -v
 ```
 
 If you only want to run a subset of tests (say you're developing a new test),

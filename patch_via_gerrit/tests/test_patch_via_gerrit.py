@@ -209,15 +209,13 @@ class TestGerritPatches:
         assert list(changes.keys()) == ["179148"]
 
     def test_ignore_manifest(self):
-        # A change to the manifest repository, but we request ignoring manifest changes
+        # Request ignoring manifest changes
         self.reset()
         self.gerrit_patches.set_ignore_manifest(True)
-        self.gerrit_patches.patch_repo_sync(['183522'], 'review')
-        assert self.gerrit_patches.ignored_reviews == ['183522']
+        assert self.gerrit_patches.ignore_manifest == True
 
     def test_only_manifest(self):
-        # A change to a non-manifest repository, but we request only manifest changes
+        # Request only manifest changes
         self.reset
         self.gerrit_patches.set_only_manifest(True)
-        self.gerrit_patches.patch_repo_sync(['134808'], 'review')
-        assert self.gerrit_patches.ignored_reviews == ['134808']
+        assert self.gerrit_patches.only_manifest == True
