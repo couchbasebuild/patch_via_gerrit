@@ -61,6 +61,11 @@ def cd(path):
         os.chdir(cwd)
 
 
+def print_divider():
+    """Print a visual divider line"""
+    print("=" * 80)
+
+
 def default_ini_file():
     """
     Returns a string path to the default patch_via_gerrit.ini
@@ -135,8 +140,9 @@ class GerritPatches:
     def __init__(self, gerrit_url, user, passwd, checkout=False, whitelist_branches=[]):
         """Initial Gerrit connection and set base options"""
 
-        auth = HTTPBasicAuth(user, passwd)
+        auth = HTTPBasicAuth(user, passwd) if user and passwd else None
         self.rest = GerritRestAPI(url=gerrit_url, auth=auth)
+        self.gerrit_url = gerrit_url
         self.base_options = [
             'CURRENT_REVISION', 'CURRENT_COMMIT', 'DOWNLOAD_COMMANDS'
         ]
@@ -148,6 +154,9 @@ class GerritPatches:
         # We track what's been applied to ensure at least the changes we
         # specifically requested got done
         self.applied_reviews = []
+        # Track what was originally requested (for reporting)
+        self.request_type = None  # 'review', 'topic', or 'change'
+        self.request_values = []  # The actual values requested
         # Manifest project name (could theoretically be dynamic)
         self.manifest = None
         # The manifest is only read from disk if manifest_stale is true. This
@@ -157,6 +166,8 @@ class GerritPatches:
         self.manifest_project = 'manifest'
         self.ignore_manifest = False
         self.only_manifest = False
+        # Force check even if ignore_manifest is set (used for remotes without manifests)
+        self.force_check_applied = False
         # We use this regex to determine if the revision is a sha, for a
         # given project in the manifest
         self.sha_re = re.compile(r'[0-9a-f]{40}')
@@ -432,7 +443,7 @@ class GerritPatches:
     def check_requested_reviews_applied(self):
         # If one or more of our requested reviews doesn't appear in applied reviews,
         # something the user asked for didn't happen. Error out with some info.
-        if any(
+        if self.requested_reviews and any(
             item not in self.applied_reviews
             for item in self.requested_reviews
         ):
@@ -442,12 +453,28 @@ class GerritPatches:
                 f'Applied: {self.applied_reviews}'
             )
             sys.exit(1)
-        elif self.requested_reviews:
-            logger.info(
-                f"All explicitly-requested review IDs applied! "
-                f'Requested: {self.requested_reviews} '
-                f'Applied: {self.applied_reviews}'
-            )
+        elif self.applied_reviews:
+            # Show summary of what was applied (whether requested by review ID, topic, or change ID)
+            if self.requested_reviews:
+                logger.info(
+                    f"All explicitly-requested review IDs applied! "
+                    f'Requested: {self.requested_reviews} '
+                    f'Applied: {self.applied_reviews}'
+                )
+            elif self.request_type and self.request_values:
+                if self.request_type == 'topic':
+                    topics_str = ', '.join([f"'{t}'" for t in self.request_values])
+                    logger.info(
+                        f"Applied review IDs from topic(s) {topics_str}: {self.applied_reviews}"
+                    )
+                elif self.request_type == 'change':
+                    logger.info(
+                        f"Applied review IDs from change ID(s) {self.request_values}: {self.applied_reviews}"
+                    )
+            else:
+                logger.info(
+                    f"Applied review IDs: {self.applied_reviews}"
+                )
 
 
     def apply_single_review(self, review, proj_path):
@@ -467,7 +494,7 @@ class GerritPatches:
             sys.exit(5)
 
         logger.info(
-            f'***** Applying https://review.couchbase.org/'
+            f'***** Applying {self.gerrit_url.rstrip("/")}/'
             f'{review._number} to project {review.project}:'
         )
         try:
@@ -557,8 +584,8 @@ class GerritPatches:
         if not self.only_manifest:
             self.apply_non_manifest_reviews(reviews)
 
-        # Only do this check when doing a full apply
-        if not self.only_manifest and not self.ignore_manifest:
+        # Only do this check when doing a full apply (or forced)
+        if (not self.only_manifest and not self.ignore_manifest) or self.force_check_applied:
             self.check_requested_reviews_applied()
 
 
@@ -585,11 +612,20 @@ def main():
                         default=default_config_file)
     change_group = parser.add_mutually_exclusive_group(required=True)
     change_group.add_argument('-r', '--review-id', dest='review_ids', nargs='+',
-                       action=ParseCSVs, help='review IDs to apply (comma-separated)')
+                       action=ParseCSVs,
+                       help='review IDs to apply (comma-separated). '
+                            'Prefix with "asterixdb:" to use asterixdb gerrit '
+                            '(e.g., asterixdb:20503)')
     change_group.add_argument('-g', '--change-id', dest='change_ids', nargs='+',
-                       action=ParseCSVs, help='change IDs to apply (comma-separated)')
+                       action=ParseCSVs,
+                       help='change IDs to apply (comma-separated). '
+                            'Prefix with "asterixdb:" to use asterixdb gerrit '
+                            '(e.g., asterixdb:I1234...)')
     change_group.add_argument('-t', '--topic', dest='topics', nargs='+',
-                       action=ParseCSVs, help='topics to apply (comma-separated)')
+                       action=ParseCSVs,
+                       help='topics to apply (comma-separated). '
+                            'Prefix with "asterixdb:" to use asterixdb gerrit '
+                            '(e.g., asterixdb:my-topic)')
     parser.add_argument('-w', '--whitelist-branches', nargs='+',
                         dest='whitelist_branches',
                         action=ParseCSVs,
@@ -623,37 +659,84 @@ def main():
         sys.exit(1)
     os.chdir(args.repo_source)
 
-    # Initialize class to allow connection to Gerrit URL, determine
-    # type of starting parameters and then find all related reviews
-    gerrit_patches = GerritPatches.from_config_file(
-        args.gerrit_config,
-        args.checkout,
-        args.whitelist_branches
-    )
-    if args.only_manifest:
-        gerrit_patches.set_only_manifest(True)
-    elif args.ignore_manifest:
-        gerrit_patches.set_ignore_manifest(True)
-
+    # Determine id_type and collect raw values
     if args.review_ids:
         id_type = 'review'
-        review_ids = args.review_ids
-        gerrit_patches.requested_reviews = args.review_ids
+        raw_values = args.review_ids
     elif args.change_ids:
         id_type = 'change'
-        review_ids = args.change_ids
+        raw_values = args.change_ids
     else:
         id_type = 'topic'
-        review_ids = args.topics
+        raw_values = args.topics
 
     logger.info(f"******** {version_string} ********")
-    if review_ids is None:
+    if raw_values is None:
         logger.info("No patches requested, so doing nothing")
         sys.exit(0)
 
-    logger.info(f"Initial request to patch {id_type}s: {', '.join(review_ids)}")
+    # Create separate lists of main (review.couchbase.org) and
+    # asterixdb (asterix-gerrit.ics.uci.edu) changes
+    main_ids = []
+    asterixdb_ids = []
+    for val in raw_values:
+        if val.startswith('asterixdb:'):
+            asterixdb_ids.append(val.split(':', 1)[1])
+        else:
+            main_ids.append(val)
 
-    gerrit_patches.patch_repo_sync(review_ids, id_type)
+    # Process review.couchbase.org changes (if any)
+    if main_ids:
+        print_divider()
+        gerrit_patches = GerritPatches.from_config_file(
+            args.gerrit_config,
+            args.checkout,
+            args.whitelist_branches
+        )
+        if args.only_manifest:
+            gerrit_patches.set_only_manifest(True)
+        elif args.ignore_manifest:
+            gerrit_patches.set_ignore_manifest(True)
+
+        if id_type == 'review':
+            gerrit_patches.requested_reviews = main_ids
+
+        gerrit_patches.request_type = id_type
+        gerrit_patches.request_values = main_ids
+
+        logger.info(
+            f"Initial request to patch {id_type}s on [main] "
+            f"({gerrit_patches.gerrit_url}): {', '.join(main_ids)}"
+        )
+        gerrit_patches.patch_repo_sync(main_ids, id_type)
+
+    # Process asterixdb changes (if any)
+    if asterixdb_ids:
+        print_divider()
+        asterixdb_patches = GerritPatches(
+            'https://asterix-gerrit.ics.uci.edu', '', '',
+            args.checkout, args.whitelist_branches
+        )
+        # Asterixdb remote will never contain manifest changes
+        asterixdb_patches.set_ignore_manifest(True)
+        # But we still want to verify requested reviews were applied
+        asterixdb_patches.force_check_applied = True
+
+        if id_type == 'review':
+            asterixdb_patches.requested_reviews = asterixdb_ids
+
+        asterixdb_patches.request_type = id_type
+        asterixdb_patches.request_values = asterixdb_ids
+
+        logger.info(
+            f"Initial request to patch {id_type}s on [asterixdb] "
+            f"({asterixdb_patches.gerrit_url}): {', '.join(asterixdb_ids)}"
+        )
+        asterixdb_patches.patch_repo_sync(asterixdb_ids, id_type)
+
+    # Final divider to close output
+    if main_ids or asterixdb_ids:
+        print_divider()
 
 if __name__ == '__main__':
     try:

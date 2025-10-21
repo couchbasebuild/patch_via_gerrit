@@ -10,7 +10,7 @@ mkdir -p "${BUILDDIR}"
 python3 -m venv "${BUILDDIR}/venv"
 . "${BUILDDIR}/venv/bin/activate"
 
-pip3 install pyinstaller==5.7.0
+pip3 install pyinstaller==5.13.2
 
 # Customize _buildversion.py if build info available in environment
 if [ ! -z "${VERSION}" -a ! -z "${BLD_NUM}" ]; then
