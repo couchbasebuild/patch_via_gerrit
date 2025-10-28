@@ -21,9 +21,9 @@ import xml.etree.ElementTree as EleTree
 
 import requests.exceptions
 
+from importlib.metadata import version
 from shutil import which
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth
-from patch_via_gerrit.scripts._version import __version__, __build__
 
 
 # Set up logging and handler
@@ -600,7 +600,7 @@ def main():
     # can have unwanted side-effects for our subprocesses.
     os.environ.pop("LD_LIBRARY_PATH", None)
 
-    version_string = f"patch_via_gerrit version {__version__} (build {__build__})"
+    version_string = f"patch_via_gerrit version {version('patch-via-gerrit')}"
     default_config_file = default_ini_file()
     parser = argparse.ArgumentParser(
         description='Patch repo sync with requested Gerrit reviews'
