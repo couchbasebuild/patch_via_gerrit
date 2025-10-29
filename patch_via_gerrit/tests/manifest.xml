@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <!-- This exists only for testing patch_via_gerrit. It should never be built. -->
+  <remote name="couchbase"     fetch="https://github.com/couchbase/"         review="review.couchbase.org" />
+  <remote name="couchbase-priv" fetch="ssh://git@github.com/couchbase/"    review="review.couchbase.org" />
+
+  <default remote="couchbase" revision="master" />
+
+  <project name="geocouch" revision="3e8040787139e3c67766ce50398860c185737b8a"/>
+  <project name="eventing" path="goproj/src/github.com/couchbase/eventing"/>
+  <project name="eventing-ee" path="goproj/src/github.com/couchbase/eventing-ee" remote="couchbase-priv"/>
+  <project name="tlm" revision="cheshire-cat" groups="kv"/>
+  <project name="build" groups="build"/>
+
+</manifest>
