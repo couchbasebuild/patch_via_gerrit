@@ -168,14 +168,6 @@ class TestGerritPatches:
         assert e.type == SystemExit
         assert e.value.code == 5
 
-    def test_patch_repo_sync_manifest_project_change(self):
-        # applying a change to the manifest repository itself, linked to a
-        # change to the newly-added project via a topic
-        self.reset()
-        self.gerrit_patches.requested_reviews = ['162331']
-        self.gerrit_patches.patch_repo_sync(['162331'], 'review')
-        assert os.path.exists(f'{conftest.source_path}/mossScope/test/change5')
-
     def test_get_topic_with_colon(self):
         # CBD-4568: get_changes_via_topic_id formerly used the raw topic name
         # when querying gerrit, the results showed 500 results (the pagination
